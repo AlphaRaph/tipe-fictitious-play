@@ -21,11 +21,10 @@ respectivement les fantômes bleus, rouges, bleus adverses, rouges adverses *)
 
     ( " 'B' + i " désigne char_of_int ((int_of_char 'B') + i)  )
 *)
-type node = player * string * int * int * int * int 
-                                                    
+type node = { p: player; b: string; b1: int; r1: int; b2: int; r2: int }
 
 (* type info_set : Représente un ensemble d'information *)
-type info_set = player * string * int * int * int * int 
+type info_set = node 
                                                     
 
 (* type pi_set : partial information set. 
@@ -188,9 +187,7 @@ module Tools = struct
             sortie : a^n *)
         if n = 0 then 1 else a * (power (n-1) a)
 
-    let power_of_2 = Array.init 1000 (fun i -> power i 2)
-
-    let print_node ((p, b, b1, r1, b2, r2) : info_set) : unit = 
+    let print_node ({p; b; b1; r1; b2; r2} : info_set) : unit = 
         for i = (Config.board_height-1) downto 0 do
             Printf.printf "|";
             for j = 0 to (Config.board_width-1) do
@@ -205,7 +202,7 @@ module Tools = struct
         Printf.printf "Nombre de fantômes bleus de P2 vivants : %d\n" b2;
         Printf.printf "Nombre de fantômes rouges de P2 vivants : %d\n" r2
     
-    let print_info_set ((p, b, b1, r1, b2, r2) : info_set) : unit = 
+    let print_info_set ({p; b; b1; r1; b2; r2} : info_set) : unit = 
         for i = (Config.board_height-1) downto 0 do
             Printf.printf "|";
             for j = 0 to (Config.board_width-1) do
@@ -353,64 +350,64 @@ module Placement = struct
 
     let number_of_init_possible_placements = Array.length init_possible_placements_array
 
-    let add_init_placement ((p, b, b1, r1, b2, r2) : node) (pl : placement) : node = 
+    let add_init_placement ({p; b; b1; r1; b2; r2} : node) (pl : placement) : node = 
         match p with 
         | P1 -> 
-            P2,
-            (let cnt = ref (-1) in
-            String.init 
-                Config.board_length 
-                (fun k -> 
-                    if List.mem k Config.p1_placement_cases then (
-                        incr cnt;
-                        Tools.char p (pl !cnt) !cnt
-                    ) else b.[k] )
-            ),
-            Config.number_of_blue_ghosts, 
-            Config.number_of_red_ghosts, 
-            b2,
-            r2
+            { p = P2;
+              b = (let cnt = ref (-1) in
+                  String.init 
+                      Config.board_length 
+                      (fun k -> 
+                          if List.mem k Config.p1_placement_cases then (
+                              incr cnt;
+                              Tools.char p (pl !cnt) !cnt
+                          ) else b.[k] )
+                  );
+              b1 = Config.number_of_blue_ghosts; 
+              r1 = Config.number_of_red_ghosts; 
+              b2;
+              r2 }
         | P2 -> 
-            P1,
-            (let cnt = ref (-1) in
-            String.init 
-                Config.board_length 
-                (fun k -> 
-                    if List.mem k Config.p2_placement_cases then (
-                        incr cnt;
-                        Tools.char p (pl !cnt) !cnt
-                    ) else b.[k] )
-            ),
-            b1, 
-            r1, 
-            Config.number_of_blue_ghosts,
-            Config.number_of_red_ghosts
+            { p = P1;
+              b = (let cnt = ref (-1) in
+                  String.init 
+                      Config.board_length 
+                      (fun k -> 
+                          if List.mem k Config.p2_placement_cases then (
+                              incr cnt;
+                              Tools.char p (pl !cnt) !cnt
+                          ) else b.[k] )
+                  );
+              b1; 
+              r1; 
+              b2 = Config.number_of_blue_ghosts;
+              r2 = Config.number_of_red_ghosts }
 
-    let put_placement ((p, b, b1, r1, b2, r2) : info_set) (pl : placement) : node = 
+    let put_placement ({p; b; b1; r1; b2; r2} : info_set) (pl : placement) : node = 
         (* sortie : un noeud de l'ensemble d'information donné où les fantômes inconnus sont colorés selon pl 
         Remarque : ne fonctionne pas correctement s'il y a un fantôme inconnu de mort. *)
-        p,
-        (
-        String.init 
-            Config.board_length
-            (fun k -> 
-                match Tools.read_char b.[k] with
-                | Some opp, _, cnt when opp <> p -> Tools.char (Tools.other p) (pl cnt) cnt (* C'est les fantômes adverses qu'on colorie *)
-                | _ -> b.[k]  )
-        ),
-        b1, 
-        r1, 
-        b2, 
-        r2
+        { p;
+          b = (
+          String.init 
+              Config.board_length
+              (fun k -> 
+                  match Tools.read_char b.[k] with
+                  | Some opp, _, cnt when opp <> p -> Tools.char (Tools.other p) (pl cnt) cnt (* C'est les fantômes adverses qu'on colorie *)
+                  | _ -> b.[k]  )
+          );
+          b1; 
+          r1; 
+          b2; 
+          r2 }
 
-    let is_placement_node (p, b, b1, r1, b2, r2 : node) : bool = 
+    let is_placement_node ({b1; r1; b2; r2; _} : node) : bool = 
         (* Sortie : true ssi le noeud donné argument est la racine ou un fils de la racine, 
             i.e, un noeud où les alternatives sont des placements et non des mouvements de fantôme.*)
         (b1 = 0 && r1 = 0) || (b2 = 0 && r2 = 0)
 
 
     let print_placement (n : node) (pl : placement) : unit = 
-        let (p, b, b1, r1, b2, r2) = add_init_placement n pl in (* on ajoute le placement mais il pense 
+        let {p; b; _} = add_init_placement n pl in (* on ajoute le placement mais il pense 
                                                                             donc que c'est au joueur suivant de jouer *)
         for i = (Config.board_height-1) downto 0 do
             Printf.printf "|";
@@ -431,7 +428,7 @@ end
 
 module GameTree = struct 
 
-    let descend (k_from, k_to : alternative) ((p, b, b1, r1, b2, r2) as n : node): node = 
+    let descend (k_from, k_to : alternative) ({p; b; b1; r1; b2; r2} as n : node): node = 
         (* sortie : renvoie le noeud dérivant du noeud n en jouant a *)
         if k_from < 0 then 
             Placement.add_init_placement n Placement.init_possible_placements_array.(-k_from-1)
@@ -447,17 +444,14 @@ module GameTree = struct
                 | Some P2, R, _ -> b1, r1, b2, r2-1
                 | _ -> failwith "Ce cas est impossible."
             in
-            Tools.other p, 
-            String.init 
-                Config.board_length 
-                (fun k -> if k = k_from then '.' else if k = k_to then b.[k_from] else b.[k]),
-            b1',
-            r1',
-            b2', 
-            r2'
+            { p = Tools.other p;
+              b = String.init 
+                  Config.board_length 
+                  (fun k -> if k = k_from then '.' else if k = k_to then b.[k_from] else b.[k]);
+              b1 = b1'; r1 = r1'; b2 = b2'; r2 = r2' }
 
     (* Premiers noeuds de l'arbre en Config4x4 *)
-    let root = P1, String.make Config.board_length '.', 0, 0, 0, 0
+    let root = { p = P1; b = String.make Config.board_length '.'; b1 = 0; r1 = 0; b2 = 0; r2 = 0 }
     let n1 = descend (-1, 0) root
     let n2 = descend (-2, 0) root
     let n11 = descend (-1, 0) n1
@@ -478,7 +472,7 @@ module GameTree = struct
     let alternatives (x_set : pi_set) : alternative list = 
         (* sortie : la liste des coups possibles depuis un ensemble d'information partielle.*)
 
-        let (p, b, b1, r1, b2, r2)= fst (List.hd x_set) in (* Un seul noeud du PI-Set suffit 
+        let {p; b; b1; r1; b2; r2} = fst (List.hd x_set) in (* Un seul noeud du PI-Set suffit 
                                                         pour déterminer les coups jouables puisque chacun 
                                                         des noeuds ont les mêmes coups possibles étant donné
                                                         qu'ils appartiennent au même PI-Set *)
@@ -516,11 +510,11 @@ module GameTree = struct
         (* sortie : le joueur dont c'est le tour *)
         match x_pi_set with 
         | [] -> failwith "Impossible de déterminer le joueur d'un ensemble d'information partielle vide."
-        | ((p, _, _, _, _, _), _)::_ -> p
+        | ({p; _}, _)::_ -> p
 
 
 
-    let is_leaf ((p, b, b1, r1, b2, r2) : node) : bool = 
+    let is_leaf ({b; b1; r1; b2; r2; _} : node) : bool = 
         (*  entrée : un noeud
             sortie : true ssi le noeud est une feuille, i.e la partie est terminée dans ce noeud.  *)
 
@@ -532,7 +526,7 @@ module GameTree = struct
         (r2 = 0 && b2 <> 0) (* && ... pour prendre en compte la racine et ses enfants (= les noeuds de placement)*)
 
 
-    let payoff (p : player) ((_, b, b1, r1, b2, r2) : node) : float = 
+    let payoff (p : player) ({b; b1; r1; b2; r2; _} : node) : float = 
         (* précondition : le noeud est une feuille 
         sortie : -1 si le joueur donné perd, 1 s'il gagne, 0 sinon*)
 
@@ -596,7 +590,7 @@ end
 
 
 module Encoding = struct 
-    let encode ((p, b, b1, r1, b2, r2) as n : info_set) : int = 
+    let encode ({p; b; b1; r1; b2; r2} as n : info_set) : int = 
         (* précondition : on est en config4x4
         sortie : on code sur 22 bits l'ensemble d'information qui représente un état du jeu : 
             - 4 premiers bits = position (indice k) fantôme bleu connu
@@ -636,16 +630,16 @@ module Encoding = struct
                 Printf.printf "Attention : voici le noeud qui provoque une erreur :\n";
                 Tools.print_node n;
                 failwith "Erreur lors de l'encodage : le seul fantôme inconnu de vivant n'a pas été repéré.\n" end;
-        !b_pos + 
-        (Tools.power_of_2.(4)* !r_pos) + 
-        (Tools.power_of_2.(8) * !u0_pos) +
-        (Tools.power_of_2.(12) * !u1_pos) +
-        (Tools.power_of_2.(16) * b1) +
-        (Tools.power_of_2.(17) * r1) +
-        (Tools.power_of_2.(18) * b2) +
-        (Tools.power_of_2.(19) * r2) +
-        (Tools.power_of_2.(20) * (match p with | P1 -> 0 | P2 -> 1)  ) +
-        (Tools.power_of_2.(21) * !blue_num)
+        !b_pos lor 
+        (!r_pos lsl 4) lor 
+        (!u0_pos lsl 8) lor
+        (!u1_pos lsl 12) lor
+        (b1 lsl 16) lor
+        (r1 lsl 17) lor
+        (b2 lsl 18) lor
+        (r2 lsl 19) lor
+        ((match p with | P1 -> 0 | P2 -> 1) lsl 20) lor
+        (!blue_num lsl 21)
 
 end 
 
@@ -676,7 +670,7 @@ end
 
 module UserInterface = struct 
 
-    let rec user_alternative ((p, b, _, _, _, _) as n : node) : alternative = 
+    let rec user_alternative ({p; b; _} as n : node) : alternative = 
         (* demande à l'utilisateur de rentrer un coup, puis renvoie ce coup s'il est correct, sinon
             elle s'appelle récursivement. *)
         let explode (str : string) : char list = 
@@ -754,7 +748,7 @@ module UserInterface = struct
         Printf.printf "Voulez-voir la couleur des fantômes adverses ? ('1' : oui, '0': non) \n";
         let visible = 
             try read_int () == 1 with Failure _ -> raise IncorrectAnswer in
-        let rec play_game ((p, b, b1, r1, b2, r2) as n : node) (g : game): unit = 
+        let rec play_game ({p; b; b1; r1; b2; r2} as n : node) (g : game): unit = 
             if GameTree.is_leaf n then (
                 Tools.print_node n;
                 Printf.printf "\n";
@@ -792,7 +786,7 @@ module UserInterface = struct
         (* Deux stratégies (pures ou mixtes) s'affrontent avec un nombre de coups (total, pas chacun) limité à max_cnt.
         Sortie : Si la partie dépasse max_cnt coups, il y a égalité : None est renvoyée. Sinon Some (le joueur gagnant) 
             est renvoyée *)
-        let rec play_game ((p, b, b1, r1, b2, r2) as n : node) (cnt : int) (g: game): player option= 
+        let rec play_game ({p; b; b1; r1; b2; r2} as n : node) (cnt : int) (g: game): player option= 
             if GameTree.is_leaf n || cnt > max_cnt then (
                 match p, GameTree.payoff p n with 
                 | P1, 1. | P2, -1. -> Some P1
@@ -807,7 +801,7 @@ module UserInterface = struct
     let show_strategy_against_strategy (p1_str : strategy) (p2_str : strategy) (max_cnt : int) : player option = 
         (* C'est exactement la même fonction que strategy_against_strategy, mais celle-ci affiche l'état du jeu entre 
             chaque coup. *)
-        let rec play_game ((p, b, b1, r1, b2, r2) as n : node) (cnt : int) (g : game): player option= 
+        let rec play_game ({p; b; b1; r1; b2; r2} as n : node) (cnt : int) (g : game): player option= 
             Printf.printf "%s\n" b;
             Tools.print_node n;
             Printf.printf "\n";
@@ -908,31 +902,15 @@ module IMP_MINIMAX = struct
 
     let softmax (alt_scores : (alternative * float) list) (lambda : float): 
             (alternative * float) list = 
-        if lambda <= 709.0 then 
-            let total = List.fold_left 
-                (fun acc (alt, score) -> exp (lambda *. score) +. acc) 
-                0. alt_scores in
-            List.map (fun (alt, prob) -> alt, (exp (lambda *. prob) /. total)) 
-                    alt_scores
-        else begin
-            Printf.printf "lambda > 709.0\n";
-            let max_score = 
-                List.fold_left 
-                    (fun best_score (alt, score) -> max score best_score) 
-                    neg_infinity alt_scores in 
-            let total = 
-                List.fold_left 
-                    (fun acc (alt, score) -> 
-                        (if Tools.compare_scores score max_score 0.001 then 1. 
-                        else 0.) +. acc) 
-                    0. alt_scores in 
-            List.map 
-                (fun (alt, score) -> 
-                    alt, 
-                    (if Tools.compare_scores score max_score 0.001 
-                        then 1. else 0.) /. total
-                ) alt_scores
-        end
+        let max_score = 
+            List.fold_left 
+                (fun best_score (_, score) -> max score best_score) 
+                neg_infinity alt_scores in 
+        let total = List.fold_left 
+            (fun acc (_, score) -> exp (lambda *. (score -. max_score)) +. acc) 
+            0. alt_scores in
+        List.map (fun (alt, score) -> alt, (exp (lambda *. (score -. max_score)) /. total)) 
+                alt_scores
 
     let rec value (p : player) (opp_strs : strategy Queue.t) (x_set : set) 
             (depth : int) 
@@ -976,7 +954,7 @@ module IMP_MINIMAX = struct
     let imp_minimax (previous_opp_strs : strategy Queue.t) (p : player) 
             (my_last_str : strategy) (max_depth : int) (lambda : float): 
             float * strategy =
-        let h = Hashtbl.create Tools.power_of_2.(10) in 
+        let h = Hashtbl.create (1 lsl 10) in 
         let score = 
             match p with 
             | P1 -> 
@@ -1040,7 +1018,7 @@ module IMP_MINIMAX = struct
     let pure_tpg_imp_minimax (p : player) (depth : int) (lambda : float): strategy = 
         (* Peut servir de stratégie initiale pour la méthode smooth fictitious 
             play. Cet algorithme n'a aucune raison d'être correct.*)
-        let h = Hashtbl.create Tools.power_of_2.(15) in 
+        let h = Hashtbl.create (1 lsl 15) in 
         fun (g : game) (i : info_set) -> 
             let code = Encoding.encode i in
             match Hashtbl.find_opt h (g, code) with 
