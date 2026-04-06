@@ -542,7 +542,7 @@ module GameTree = struct
         else
             0.
 
-    let opg_children (opp_strs : strategy Queue.t) (x_set : pi_set) (g : game) : (set * alternative) list = 
+    let opg_children (avg_opp_str : strategy) (x_set : pi_set) (g : game) : (set * alternative) list = 
         (* One player game children 
         pré-condition : x_set est non vide, ne contient pas deux noeuds identiques
         sortie : la liste des enfants de l'ensemble x_set. Un enfant est un ensemble d'ensembles à informations imparfaites
@@ -569,7 +569,7 @@ module GameTree = struct
                             else
                               (List.map (fun opp_alt -> 
                                   descend opp_alt n, 
-                                  w *. (Queue.fold (fun acc str -> (List.assoc opp_alt (str g (convert_to_info_set [(n, w)])))+. acc) 0. opp_strs) /. (float (Queue.length opp_strs)),
+                                  w *. (List.assoc opp_alt (avg_opp_str g (convert_to_info_set [(n, w)]))),
                                   if fst opp_alt < 0 then (0, -1)::g else opp_alt::g) (alternatives [(n, w)]) )@acc ) 
                         [] pi_set
                         ), alt)::acc
@@ -912,7 +912,7 @@ module IMP_MINIMAX = struct
         List.map (fun (alt, score) -> alt, (exp (lambda *. (score -. max_score)) /. total)) 
                 alt_scores
 
-    let rec value (p : player) (opp_strs : strategy Queue.t) (x_set : set) 
+    let rec value (p : player) (avg_opp_str : strategy) (x_set : set) 
             (depth : int) 
             (h : (game * int, (alternative * float) list) Hashtbl.t) 
             (max_depth : int) (lambda : float): float = 
@@ -926,8 +926,8 @@ module IMP_MINIMAX = struct
             ça ne peut pas être une feuille donc inutile d'appeler payoff *)
             else begin
             
-            let children = GameTree.opg_children opp_strs x_pi_set g in 
-            let alt_probs = List.map (fun (y_set, alt) -> alt, value p opp_strs 
+            let children = GameTree.opg_children avg_opp_str x_pi_set g in 
+            let alt_probs = List.map (fun (y_set, alt) -> alt, value p avg_opp_str 
                 y_set (depth+1) h max_depth lambda) children in
             Hashtbl.add h (g, code) (softmax alt_probs lambda);
             List.fold_left 
@@ -947,34 +947,31 @@ module IMP_MINIMAX = struct
                     ) 0. leaves 
             +.
             List.fold_left (fun sum x -> 
-                let score = value p opp_strs x depth h max_depth lambda in 
+                let score = value p avg_opp_str x depth h max_depth lambda in 
                 sum +. score) 0. pi_sets
         | Leaf (leaf,w, g) -> w *. (GameTree.payoff p leaf)
 
-    let imp_minimax (previous_opp_strs : strategy Queue.t) (p : player) 
+    let imp_minimax (avg_opp_str : strategy) (p : player) 
             (my_last_str : strategy) (max_depth : int) (lambda : float): 
-            float * strategy =
+            float * strategy * (game * int, (alternative * float) list) Hashtbl.t =
         let h = Hashtbl.create (1 lsl 10) in 
         let score = 
             match p with 
             | P1 -> 
-                value P1 previous_opp_strs (Set [(GameTree.root, 1., [])]) 
+                value P1 avg_opp_str (Set [(GameTree.root, 1., [])]) 
                     0 h max_depth lambda
             | P2 ->
                 let x = Set (List.map 
                     (fun opp_alt -> 
                     GameTree.descend opp_alt GameTree.root, 
-                    (Queue.fold (fun acc str -> 
-                        (List.assoc opp_alt (str [] GameTree.root)) +. acc) 
-                        0. previous_opp_strs) 
-                    /. (float (Queue.length previous_opp_strs)),
+                    (List.assoc opp_alt (avg_opp_str [] GameTree.root)),
                     [(0,-1)]
                     ) 
                     (GameTree.alternatives [(GameTree.root, 1.)]) 
                 ) in
-                value P2 previous_opp_strs x 0 h max_depth lambda
+                value P2 avg_opp_str x 0 h max_depth lambda
         in 
-        score, Strategy.create_strategy h my_last_str
+        score, Strategy.create_strategy h my_last_str, h
 
 
     let rec tpg_value (p : player) (x_set : set) (depth : int) (h : (game * int, (alternative * float) list) Hashtbl.t) (max_depth : int) (lambda : float) : float = 
@@ -1027,41 +1024,46 @@ module IMP_MINIMAX = struct
                 Hashtbl.find h (g, code)
     
 
+    let update_average_strategy avg_h new_h t =
+        Hashtbl.iter (fun key alt_probs ->
+            match Hashtbl.find_opt avg_h key with
+            | None -> Hashtbl.add avg_h key alt_probs
+            | Some avg_probs ->
+                let updated_probs = List.map (fun (alt, p) ->
+                    let old_p = try List.assoc alt avg_probs with Not_found -> 0.0 in
+                    (alt, ((old_p *. float (t - 1)) +. p) /. float t)
+                ) alt_probs in
+                Hashtbl.replace avg_h key updated_probs
+        ) new_h
+
     let smooth_fictitious_play (nb_rounds : int) (depth : int) 
                                 (lambda : float) : strategy * strategy = 
         Printf.printf "Création des stratégies aléatoires initiales.\n";
-        let previous_p1_strs = Queue.create () in 
-        let previous_p2_strs = Queue.create () in
+        let avg_h_p1 = Hashtbl.create (1 lsl 15) in 
+        let avg_h_p2 = Hashtbl.create (1 lsl 15) in
         let last_p1_str = ref (Strategy.create_uniform_strategy ()) in 
         let last_p2_str = ref (Strategy.create_uniform_strategy ()) in
-        Queue.push !last_p1_str previous_p1_strs; 
-        Queue.push !last_p2_str previous_p2_strs;
-        let first_p1 = ref true in
-        let first_p2 = ref true in
+
+        let avg_p1_str = ref !last_p1_str in
+        let avg_p2_str = ref !last_p2_str in
 
         Printf.printf "Stratégies aléatoires intiales créées.\n";
         for round = 1 to nb_rounds do 
-            let score1, new_p1_str = 
-                imp_minimax previous_p2_strs P1 !last_p1_str depth lambda in 
+            let score1, new_p1_str, h1 = 
+                imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
             last_p1_str := new_p1_str;
-            Queue.push new_p1_str previous_p1_strs;
-
-            if !first_p1 && Queue.length previous_p1_strs > 15 then (
-                Queue.drop previous_p1_strs;
-            );
+            update_average_strategy avg_h_p1 h1 round;
+            avg_p1_str := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
 
             Printf.printf "Tour %d prof %d : P1 répond à P2 avec %f.\n" round 
                             depth score1;
             flush stdout;
 
-            let score2, new_p2_str = 
-                imp_minimax previous_p1_strs P2 !last_p2_str depth lambda in 
+            let score2, new_p2_str, h2 = 
+                imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
             last_p2_str := new_p2_str;
-            Queue.push new_p2_str previous_p2_strs;
-
-            if !first_p2 && Queue.length previous_p2_strs > 15 then (
-                Queue.drop previous_p2_strs; 
-            );
+            update_average_strategy avg_h_p2 h2 round;
+            avg_p2_str := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
 
             Printf.printf "Tour %d prof %d : P2 répond à P1 avec %f.\n" round 
                             depth score2;
@@ -1076,34 +1078,32 @@ module IMP_MINIMAX = struct
 
         let stop_time = Sys.time () +. time in
         Printf.printf "Création des stratégies aléatoires initiales.\n";
-        let previous_p1_strs = Queue.create () in 
-        let previous_p2_strs = Queue.create () in
-        let last_p1_str = ref (Strategy.create_uniform_strategy()) in 
+        let avg_h_p1 = Hashtbl.create (1 lsl 15) in 
+        let avg_h_p2 = Hashtbl.create (1 lsl 15) in
+        let last_p1_str = ref (Strategy.create_uniform_strategy ()) in 
         let last_p2_str = ref (Strategy.create_uniform_strategy ()) in
-        Queue.push !last_p1_str previous_p1_strs; 
-        Queue.push !last_p2_str previous_p2_strs;
+
+        let avg_p1_str = ref !last_p1_str in
+        let avg_p2_str = ref !last_p2_str in
+
         Printf.printf "Stratégies aléatoires intiales créées.\n";
-
-
         let round = ref 1 in
         while Sys.time () < stop_time do
-            let score1, new_p1_str = imp_minimax previous_p2_strs P1 
-                                                !last_p1_str depth lambda in 
+            let score1, new_p1_str, h1 = imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
             last_p1_str := new_p1_str;
-            Queue.push new_p1_str previous_p1_strs;
+            update_average_strategy avg_h_p1 h1 !round;
+            avg_p1_str := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
 
-            Printf.printf "Tour %d prof %d : P1 répond à P2 avec %f. 
-                            Temps restant : %fs\n" 
+            Printf.printf "Tour %d prof %d : P1 répond à P2 avec %f. Temps restant : %fs\n" 
                 !round depth score1 (stop_time -. Sys.time ());
             flush stdout;
 
-            let score2, new_p2_str = imp_minimax previous_p1_strs P2 
-                                                !last_p2_str depth lambda in 
+            let score2, new_p2_str, h2 = imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
             last_p2_str := new_p2_str;
-            Queue.push new_p2_str previous_p2_strs;
+            update_average_strategy avg_h_p2 h2 !round;
+            avg_p2_str := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
 
-            Printf.printf "Tour %d prof %d : P2 répond à P1 avec %f. 
-                            Temps restant : %fs\n" 
+            Printf.printf "Tour %d prof %d : P2 répond à P1 avec %f. Temps restant : %fs\n" 
                 !round depth score2 (stop_time -. Sys.time ());
             flush stdout;
             incr round;
