@@ -10,18 +10,22 @@ v1.0 *)
 type player = P1 | P2                               
 
 
-(* type node : joueur, plateau, puis le nombre de fantômes vivants pour 
-respectivement les fantômes bleus, rouges, bleus adverses, rouges adverses *)
-(* Pour le plateau : 
-    '.' : case vide
-    'B' + i : fantôme bleu de P1 provenant de la i-ème case de départ
-    'R' + i : fantôme rouge de P1 provenant de la i-ème case de départ
-    'r' + i : fantôme bleu de P2 provenant de la i-ème case de départ
-    'b' + i : fantôme rouge de P2 provenant de la i-ème case de départ
-
-    ( " 'B' + i " désigne char_of_int ((int_of_char 'B') + i)  )
+(* type node : 
+p : joueur, 
+p1_pos0 : position du fantôme de P1 ayant commencé sur p1_placement_cases[0],
+p1_pos1 : position du fantôme de P1 ayant commencé sur p1_placement_cases[1],
+p2_pos0 : position du fantôme de P2 ayant commencé sur p2_placement_cases[0],
+p2_pos1 : position du fantôme de P2 ayant commencé sur p2_placement_cases[1],
+p1_0_is_blue : true ssi le fantôme en p1_pos0 est bleu
+p2_0_is_blue : true ssi le fantôme en p2_pos0 est bleu
 *)
-type node = { p: player; b: string; b1: int; r1: int; b2: int; r2: int }
+type node = { 
+    p: player; 
+    p1_pos0: int; p1_pos1: int; 
+    p2_pos0: int; p2_pos1: int; 
+    p1_0_is_blue: bool; 
+    p2_0_is_blue: bool;
+}
 
 (* type info_set : Représente un ensemble d'information *)
 type info_set = node 
@@ -136,88 +140,36 @@ module Tools = struct
 
     let other = function P1 -> P2 | P2 -> P1
 
-    let char (p : player) (g : ghost) (cnt : int) : char = 
-        (*  entrée : cnt : case de provenance du fantôme 
-            sortie : le caractère du fantôme correspondant aux entrées, selon 
-                la documentation du type node.*)
-        match p with 
-        | P1 -> begin 
-            match g with 
-            | B -> char_of_int (int_of_char 'B' + cnt)
-            | R -> char_of_int (int_of_char 'R' + cnt)
-            | EmptyCase -> '.'
-        end
-        | P2 -> begin 
-            match g with 
-            | B -> char_of_int (int_of_char 'b' + cnt)
-            | R -> char_of_int (int_of_char 'r' + cnt)
-            | EmptyCase -> '.'
-        end
+    let get_char_at (n: node) (k: int) : char =
+        if k = n.p1_pos0 then (if n.p1_0_is_blue then 'B' else 'R')
+        else if k = n.p1_pos1 then (if n.p1_0_is_blue then 'C' else 'S')
+        else if k = n.p2_pos0 then (if n.p2_0_is_blue then 'b' else 'r')
+        else if k = n.p2_pos1 then (if n.p2_0_is_blue then 'c' else 's')
+        else '.'
 
-    let read_char (c : char) : (player option) * ghost * int = 
-        (* sortie : le type de fantôme et sa case de provenance *)
-        match c with
-        | '.' -> None, EmptyCase, -1 (* Le joueur renvoyé pour cette option 
-                                        n'a pas d'importance *)
-        | _ when c >= 'r' -> Some P2, R, int_of_char c - int_of_char 'r'
-        | _ when c >= 'b' -> Some P2, B, int_of_char c - int_of_char 'b'
-        | _ when c >= 'R' -> Some P1, R, int_of_char c - int_of_char 'R'
-        | _ when c >= 'B' -> Some P1, B, int_of_char c - int_of_char 'B'
-        | _ -> failwith ("Impossible de lire le caractère donné : " ^ 
-                            (Char.escaped c) ^ ". (Tools.read_char)")
-
-    let () = 
-        assert (read_char 'R' = (Some P1, R, 0));
-        assert (read_char 'B' = (Some P1, B, 0));
-        assert (read_char 'S' = (Some P1, R, 1));
-        assert (read_char 'C' = (Some P1, B, 1));
-        assert (read_char 'r' = (Some P2, R, 0));
-        assert (read_char 'b' = (Some P2, B, 0));
-        assert (read_char 's' = (Some P2, R, 1));
-        assert (read_char 'c' = (Some P2, B, 1));
-        assert (read_char '.' = (None, EmptyCase, -1))
-
-    let current_ghost_fn (p : player) : char -> bool = 
-        (* sortie : une fonction char -> bool qui renvoie true si le caractère 
-            répresente un fantôme de p, et false sinon *)
-        fun c -> let (p_g, _, _) = read_char c in p_g = Some p
-
-    let rec power (n : int) (a : int) = 
-        (*  précondition : n >= 0
-            sortie : a^n *)
-        if n = 0 then 1 else a * (power (n-1) a)
-
-    let print_node ({p; b; b1; r1; b2; r2} : info_set) : unit = 
+    let print_node (n : info_set) : unit = 
         for i = (Config.board_height-1) downto 0 do
             Printf.printf "|";
             for j = 0 to (Config.board_width-1) do
-            Printf.printf " %c " b.[i*Config.board_width+j]
+            Printf.printf " %c " (get_char_at n (i*Config.board_width+j))
             done;
             Printf.printf "|\n"
         done;
-        Printf.printf "C'est à %s de jouer\n" (match p with | P1 ->"P1" 
-                                                            | P2 -> "P2");
-        Printf.printf "Nombre de fantômes bleus de P1 vivants : %d\n" b1;
-        Printf.printf "Nombre de fantômes rouges de P1 vivants : %d\n" r1;
-        Printf.printf "Nombre de fantômes bleus de P2 vivants : %d\n" b2;
-        Printf.printf "Nombre de fantômes rouges de P2 vivants : %d\n" r2
+        Printf.printf "C'est à %s de jouer\n" (match n.p with | P1 ->"P1" | P2 -> "P2")
     
-    let print_info_set ({p; b; b1; r1; b2; r2} : info_set) : unit = 
+    let print_info_set (n : info_set) : unit = 
         for i = (Config.board_height-1) downto 0 do
             Printf.printf "|";
             for j = 0 to (Config.board_width-1) do
-                match read_char b.[i*Config.board_width+j] with 
-                | Some opp, _, _ when opp <> p -> Printf.printf " ? "
-                | _ -> Printf.printf " %c " b.[i*Config.board_width+j]
+                let k = i*Config.board_width+j in 
+                if (n.p = P1 && (k = n.p2_pos0 || k = n.p2_pos1)) || (n.p = P2 && (k = n.p1_pos0 || k = n.p1_pos1)) then
+                    Printf.printf " ? "
+                else
+                    Printf.printf " %c " (get_char_at n k)
             done;
             Printf.printf "|\n"
         done;
-        Printf.printf "C'est à %s de jouer\n" (match p with | P1 ->"P1" 
-                                                            | P2 -> "P2");
-        Printf.printf "Nombre de fantômes bleus de P1 vivants : %d\n" b1;
-        Printf.printf "Nombre de fantômes rouges de P1 vivants : %d\n" r1;
-        Printf.printf "Nombre de fantômes bleus de P2 vivants : %d\n" b2;
-        Printf.printf "Nombre de fantômes rouges de P2 vivants : %d\n" r2
+        Printf.printf "C'est à %s de jouer\n" (match n.p with | P1 ->"P1" | P2 -> "P2")
 
     let print_list (l : 'a list) (print_fn : 'a -> unit) : unit = 
         (* affiche la liste donnée en entrée, chacun des éléments étant affiché 
@@ -312,7 +264,9 @@ module Placement = struct
             | 0, 0 -> []
             | 0, _ -> R::aux blues (reds-1)
             | _, 0 -> B::aux (blues-1) reds
-            | _, _ -> if Random.bool () then
+            (* On pioche R proportionnellement au nombre de R restants,
+               garantissant une vraie distribution uniforme mathématiquement sur toutes les permutations (O(N)). *)
+            | _, _ -> if Random.int (blues + reds) < reds then
                         R::aux blues (reds-1)
                     else
                         B::aux (blues-1) reds 
@@ -350,75 +304,38 @@ module Placement = struct
 
     let number_of_init_possible_placements = Array.length init_possible_placements_array
 
-    let add_init_placement ({p; b; b1; r1; b2; r2} : node) (pl : placement) : node = 
-        match p with 
+    let add_init_placement (n : node) (pl : placement) : node = 
+        match n.p with 
         | P1 -> 
+            let p1c = Config.p1_placement_cases in
+            let p1_pos0, p1_pos1 = (List.nth p1c 0, List.nth p1c 1) in
+            let p1_0_is_blue = (pl 0 = B) in
             { p = P2;
-              b = (let cnt = ref (-1) in
-                  String.init 
-                      Config.board_length 
-                      (fun k -> 
-                          if List.mem k Config.p1_placement_cases then (
-                              incr cnt;
-                              Tools.char p (pl !cnt) !cnt
-                          ) else b.[k] )
-                  );
-              b1 = Config.number_of_blue_ghosts; 
-              r1 = Config.number_of_red_ghosts; 
-              b2;
-              r2 }
+              p1_pos0; p1_pos1; 
+              p2_pos0 = n.p2_pos0; p2_pos1 = n.p2_pos1; 
+              p1_0_is_blue; 
+              p2_0_is_blue = n.p2_0_is_blue }
         | P2 -> 
+            let p2c = Config.p2_placement_cases in
+            let p2_pos0, p2_pos1 = (List.nth p2c 0, List.nth p2c 1) in
+            let p2_0_is_blue = (pl 0 = B) in
             { p = P1;
-              b = (let cnt = ref (-1) in
-                  String.init 
-                      Config.board_length 
-                      (fun k -> 
-                          if List.mem k Config.p2_placement_cases then (
-                              incr cnt;
-                              Tools.char p (pl !cnt) !cnt
-                          ) else b.[k] )
-                  );
-              b1; 
-              r1; 
-              b2 = Config.number_of_blue_ghosts;
-              r2 = Config.number_of_red_ghosts }
+              p1_pos0 = n.p1_pos0; p1_pos1 = n.p1_pos1; 
+              p2_pos0; p2_pos1; 
+              p1_0_is_blue = n.p1_0_is_blue; 
+              p2_0_is_blue }
 
-    let put_placement ({p; b; b1; r1; b2; r2} : info_set) (pl : placement) : node = 
-        (* sortie : un noeud de l'ensemble d'information donné où les fantômes inconnus sont colorés selon pl 
-        Remarque : ne fonctionne pas correctement s'il y a un fantôme inconnu de mort. *)
-        { p;
-          b = (
-          String.init 
-              Config.board_length
-              (fun k -> 
-                  match Tools.read_char b.[k] with
-                  | Some opp, _, cnt when opp <> p -> Tools.char (Tools.other p) (pl cnt) cnt (* C'est les fantômes adverses qu'on colorie *)
-                  | _ -> b.[k]  )
-          );
-          b1; 
-          r1; 
-          b2; 
-          r2 }
 
-    let is_placement_node ({b1; r1; b2; r2; _} : node) : bool = 
+    let is_placement_node (n : node) : bool = 
         (* Sortie : true ssi le noeud donné argument est la racine ou un fils de la racine, 
             i.e, un noeud où les alternatives sont des placements et non des mouvements de fantôme.*)
-        (b1 = 0 && r1 = 0) || (b2 = 0 && r2 = 0)
+        (n.p1_pos0 = -1 && n.p1_pos1 = -1) || (n.p2_pos0 = -1 && n.p2_pos1 = -1)
 
 
     let print_placement (n : node) (pl : placement) : unit = 
-        let {p; b; _} = add_init_placement n pl in (* on ajoute le placement mais il pense 
-                                                                            donc que c'est au joueur suivant de jouer *)
-        for i = (Config.board_height-1) downto 0 do
-            Printf.printf "|";
-            for j = 0 to (Config.board_width-1) do
-                match Tools.read_char b.[i*Config.board_width+j] with 
-                | Some p', _, _ when p' = p -> Printf.printf " ? " (* c'est donc bien les fantômes adverses *)
-                | _ -> Printf.printf " %c " b.[i*Config.board_width+j]
-            done;
-            Printf.printf "|\n"
-        done;
-
+        let updated_n = add_init_placement n pl in (* on ajoute le placement donc il pense que c'est à l'adversaire de jouer *)
+        let updated_n = { updated_n with p = Tools.other updated_n.p } in
+        Tools.print_info_set updated_n
 
 end
 
@@ -428,30 +345,24 @@ end
 
 module GameTree = struct 
 
-    let descend (k_from, k_to : alternative) ({p; b; b1; r1; b2; r2} as n : node): node = 
+    let descend (k_from, k_to : alternative) (n : node): node = 
         (* sortie : renvoie le noeud dérivant du noeud n en jouant a *)
         if k_from < 0 then 
             Placement.add_init_placement n Placement.init_possible_placements_array.(-k_from-1)
         else if k_to < 0 then 
             Placement.add_init_placement n Placement.init_possible_placements_array.(Random.int Placement.number_of_init_possible_placements)
         else 
-            let b1', r1', b2', r2' = 
-                match Tools.read_char b.[k_to] with 
-                | None, EmptyCase, -1 -> b1, r1, b2, r2
-                | Some P1, B, _ -> b1-1,r1, b2, r2
-                | Some P1, R, _ -> b1, r1-1, b2, r2
-                | Some P2, B, _ -> b1, r1, b2-1, r2
-                | Some P2, R, _ -> b1, r1, b2, r2-1
-                | _ -> failwith "Ce cas est impossible."
-            in
-            { p = Tools.other p;
-              b = String.init 
-                  Config.board_length 
-                  (fun k -> if k = k_from then '.' else if k = k_to then b.[k_from] else b.[k]);
-              b1 = b1'; r1 = r1'; b2 = b2'; r2 = r2' }
+            let p1_pos0' = if n.p1_pos0 = k_from then k_to else (if n.p1_pos0 = k_to then -1 else n.p1_pos0) in
+            let p1_pos1' = if n.p1_pos1 = k_from then k_to else (if n.p1_pos1 = k_to then -1 else n.p1_pos1) in
+            let p2_pos0' = if n.p2_pos0 = k_from then k_to else (if n.p2_pos0 = k_to then -1 else n.p2_pos0) in
+            let p2_pos1' = if n.p2_pos1 = k_from then k_to else (if n.p2_pos1 = k_to then -1 else n.p2_pos1) in
+            { p = Tools.other n.p; 
+              p1_pos0 = p1_pos0'; p1_pos1 = p1_pos1'; 
+              p2_pos0 = p2_pos0'; p2_pos1 = p2_pos1'; 
+              p1_0_is_blue = n.p1_0_is_blue; p2_0_is_blue = n.p2_0_is_blue }
 
     (* Premiers noeuds de l'arbre en Config4x4 *)
-    let root = { p = P1; b = String.make Config.board_length '.'; b1 = 0; r1 = 0; b2 = 0; r2 = 0 }
+    let root = { p = P1; p1_pos0 = -1; p1_pos1 = -1; p2_pos0 = -1; p2_pos1 = -1; p1_0_is_blue = true; p2_0_is_blue = true }
     let n1 = descend (-1, 0) root
     let n2 = descend (-2, 0) root
     let n11 = descend (-1, 0) n1
@@ -472,34 +383,27 @@ module GameTree = struct
     let alternatives (x_set : pi_set) : alternative list = 
         (* sortie : la liste des coups possibles depuis un ensemble d'information partielle.*)
 
-        let {p; b; b1; r1; b2; r2} = fst (List.hd x_set) in (* Un seul noeud du PI-Set suffit 
-                                                        pour déterminer les coups jouables puisque chacun 
-                                                        des noeuds ont les mêmes coups possibles étant donné
-                                                        qu'ils appartiennent au même PI-Set *)
-        if b1 + b2 + r1 + r2 = 3 then []        (* partie terminée -> pas de coups possibles *)
-        else if b1 + b2 + r1 + r2 <= 2 then (   (* début de partie -> les coups possibles sont des dispositions de fantômes.*)
-            assert ((b1 = 0 && r1 = 0) || (b2 = 0 && r2 = 0));
+        let n = fst (List.hd x_set) in (* Un seul noeud du PI-Set suffit 
+                                        pour déterminer les coups jouables puisque chacun 
+                                        des noeuds ont les mêmes coups possibles étant donné
+                                        qu'ils appartiennent au même PI-Set *)
+        let alive = (if n.p1_pos0 >= 0 then 1 else 0) + (if n.p1_pos1 >= 0 then 1 else 0) + (if n.p2_pos0 >= 0 then 1 else 0) + (if n.p2_pos1 >= 0 then 1 else 0) in
+        if alive = 3 then []  (* partie terminée -> pas de coups possibles *)
+        else if alive <= 2 then (   (* début de partie -> les coups possibles sont des dispositions de fantômes.*)
+            assert (Placement.is_placement_node n);
             List.init (Placement.number_of_init_possible_placements) (fun i -> (-i-1, 0))
         ) else
-
-        let is_current_ghost = Tools.current_ghost_fn p in
-
-        let rec explore (k_from : int) (acc : alternative list) : alternative list = 
-            (*  parcourt récursivement toutes les cases du plateau de manière décroissante 
-                pour déterminer tous les coups possibles. *)
-            if k_from = -1 then acc else 
-            explore
-                (k_from-1) 
-                (if not (is_current_ghost b.[k_from]) then 
-                    acc 
-                else
-                    List.fold_left (fun acc move -> 
+        let p_ghosts = if n.p = P1 then [n.p1_pos0; n.p1_pos1] else [n.p2_pos0; n.p2_pos1] in
+        let all_p_ghosts = List.filter (fun x -> x >= 0) p_ghosts in
+        
+        List.fold_left (fun acc k_from ->
+            List.fold_left (fun acc' move -> 
                         let k_to = k_from + move in
-                        if on_the_board k_from k_to && not (is_current_ghost b.[k_to]) then (k_from, k_to)::acc
-                        else acc
-                    ) acc Config.possible_moves  ) in
-
-        explore (Config.board_length-1) []
+                let target_is_friendly = if n.p = P1 then (k_to = n.p1_pos0 || k_to = n.p1_pos1) else (k_to = n.p2_pos0 || k_to = n.p2_pos1) in
+                if on_the_board k_from k_to && not target_is_friendly then (k_from, k_to)::acc'
+                else acc'
+            ) acc Config.possible_moves
+        ) [] all_p_ghosts
 
     let convert_to_info_set (x_set : pi_set) : info_set = 
         (* précondition : x_set est non vide et x_set est un ensemble d'informations partiel pour le joueur dont c'est le tour *)
@@ -514,30 +418,33 @@ module GameTree = struct
 
 
 
-    let is_leaf ({b; b1; r1; b2; r2; _} : node) : bool = 
+    let is_leaf (n : node) : bool = 
         (*  entrée : un noeud
             sortie : true ssi le noeud est une feuille, i.e la partie est terminée dans ce noeud.  *)
+        let pos_b1, pos_r1 = if n.p1_0_is_blue then n.p1_pos0, n.p1_pos1 else n.p1_pos1, n.p1_pos0 in
+        let pos_b2, pos_r2 = if n.p2_0_is_blue then n.p2_pos0, n.p2_pos1 else n.p2_pos1, n.p2_pos0 in
+        List.mem pos_b1 Config.p1_exit_cases || 
+        List.mem pos_b2 Config.p2_exit_cases || 
+        (pos_b1 < 0 && pos_r1 >= 0) || 
+        (pos_r1 < 0 && pos_b1 >= 0) || 
+        (pos_b2 < 0 && pos_r2 >= 0) || 
+        (pos_r2 < 0 && pos_b2 >= 0) 
 
-        List.exists (fun k -> match Tools.read_char b.[k] with Some P1, B, _ -> true | _ -> false) Config.p1_exit_cases || 
-        List.exists (fun k -> match Tools.read_char b.[k] with Some P2, B, _ -> true | _ -> false) Config.p2_exit_cases || 
-        (b1 = 0 && r1 <> 0) || 
-        (r1 = 0 && b1 <> 0) || 
-        (b2 = 0 && r2 <> 0) || 
-        (r2 = 0 && b2 <> 0) (* && ... pour prendre en compte la racine et ses enfants (= les noeuds de placement)*)
 
-
-    let payoff (p : player) ({b; b1; r1; b2; r2; _} : node) : float = 
+    let payoff (p : player) (n : node) : float = 
         (* précondition : le noeud est une feuille 
         sortie : -1 si le joueur donné perd, 1 s'il gagne, 0 sinon*)
 
         (* On désambiguise une règle : si un fantôme bleu sort en mangeant un fantôme rouge, le fantôme bleu gagne. *)
-        if List.exists (fun k -> match Tools.read_char b.[k] with Some P1, B, _ -> true | _ -> false) Config.p1_exit_cases  then 
+        let pos_b1, pos_r1 = if n.p1_0_is_blue then n.p1_pos0, n.p1_pos1 else n.p1_pos1, n.p1_pos0 in
+        let pos_b2, pos_r2 = if n.p2_0_is_blue then n.p2_pos0, n.p2_pos1 else n.p2_pos1, n.p2_pos0 in
+        if List.mem pos_b1 Config.p1_exit_cases then 
             if p = P1 then 1. else -1.
-        else if List.exists (fun k -> match Tools.read_char b.[k] with Some P2, B, _ -> true | _ -> false) Config.p2_exit_cases then
+        else if List.mem pos_b2 Config.p2_exit_cases then
             if p = P1 then -1. else 1.
-        else if b2 = 0 || r1 = 0 then 
+        else if pos_b2 < 0 || pos_r1 < 0 then 
             if p = P1 then 1. else -1.
-        else if b1 = 0 || r2 = 0 then
+        else if pos_b1 < 0 || pos_r2 < 0 then
             if p = P1 then -1. else 1.
         else
             0.
@@ -590,56 +497,53 @@ end
 
 
 module Encoding = struct 
-    let encode ({p; b; b1; r1; b2; r2} as n : info_set) : int = 
+    let encode (n : info_set) : int = 
         (* précondition : on est en config4x4
         sortie : on code sur 22 bits l'ensemble d'information qui représente un état du jeu : 
             - 4 premiers bits = position (indice k) fantôme bleu connu
             - 4 bits suivants = position fantôme rouge connu 
             - 4 bits suivant : position du fantôme inconnu provenant de la case de départ n°0
             - 4 bits suivant : position du fantôme inconnu provenant de la case de départ n°1
-            - bit suivant : b1
+            - bit suivant : b1 (vaut 1 si le fantôme bleu de P1 est en vie, 0 sinon)
             - bit suivant : r1
             - bit suivant : b2
             - bit suivant : r2
             - bit de fin : p (0 si p = P1 et 1 si p = P2)
         (dans le sens inverse) *)
         
-        let b_pos = ref 0 in (* k pour known *)
-        let r_pos = ref 0 in 
-        let u0_pos = ref 0 in (* u pour unknown *)
-        let u1_pos = ref 0 in 
-        let blue_num = ref 0 in (* num de la case de provenance du fantôme bleu connu *)
-        let unknown_origin = ref (-1) in (* Variable utile seulement s'il n'y a qu'un seul fantôme inconnu de vivant. 0 s'il provient de 0, 1 sinon *)
-        for k = 0 to Config.board_length-1 do 
-            match Tools.read_char b.[k] with 
-            | None, _, _ -> () (* case vide*)
-            | Some p_g, B , 0 when p_g = p -> b_pos := k; blue_num := 0
-            | Some p_g, R , 0 when p_g = p -> r_pos := k; blue_num := 1
-            | Some p_g, B, 1 when p_g = p -> b_pos := k; blue_num := 1;
-            | Some p_g, R, 1 when p_g = p -> r_pos := k; blue_num := 0;
-            | Some opp, _ , 0 when opp <> p -> u0_pos:= k; unknown_origin := 0
-            | Some opp, _ , 1 when opp <> p -> u1_pos:= k; unknown_origin := 1
-            | _ -> failwith "Cas impossible.\n"
-        done;
-        (* S'il n'y a qu'un seul fantôme inconnu de vivant, il faut préciser si c'est u0 ou u1, pour cela on modifie u_pos du fantôme mort 
-        de manière à ce que u0_pos + u1_pos donne un nombre pair si c'est le fantôme u0 qui est toujours vivant et impair si c'est u1 *)
-        if (match p with P1 -> b2 + r2 = 1 | P2 -> b1 + r1 = 1) then 
-            if !unknown_origin = 0 then u1_pos := !u0_pos mod 2             (* u0_pos + u1_pos = pair *)
-            else if !unknown_origin = 1 then u0_pos := 1 + (!u1_pos mod 2)   (* u0_pos + u1_pos = impair *)
-            else begin 
-                Printf.printf "Attention : voici le noeud qui provoque une erreur :\n";
-                Tools.print_node n;
-                failwith "Erreur lors de l'encodage : le seul fantôme inconnu de vivant n'a pas été repéré.\n" end;
-        !b_pos lor 
-        (!r_pos lsl 4) lor 
-        (!u0_pos lsl 8) lor
-        (!u1_pos lsl 12) lor
+        let p1_pos0 = ref (max 0 n.p1_pos0) in
+        let p1_pos1 = ref (max 0 n.p1_pos1) in 
+        let p2_pos0 = ref (max 0 n.p2_pos0) in
+        let p2_pos1 = ref (max 0 n.p2_pos1) in 
+        
+        let b1 = (if n.p1_pos0 >= 0 && n.p1_0_is_blue then 1 else 0) + (if n.p1_pos1 >= 0 && not n.p1_0_is_blue then 1 else 0) in
+        let r1 = (if n.p1_pos0 >= 0 && not n.p1_0_is_blue then 1 else 0) + (if n.p1_pos1 >= 0 && n.p1_0_is_blue then 1 else 0) in
+        let b2 = (if n.p2_pos0 >= 0 && n.p2_0_is_blue then 1 else 0) + (if n.p2_pos1 >= 0 && not n.p2_0_is_blue then 1 else 0) in
+        let r2 = (if n.p2_pos0 >= 0 && not n.p2_0_is_blue then 1 else 0) + (if n.p2_pos1 >= 0 && n.p2_0_is_blue then 1 else 0) in
+        
+        (* Préciser via la parité de (p1_pos0 + p1_pos1) où se trouve le fantôme vivant s'il n'y en a plus qu'un pour P1 *)
+        if b1 + r1 = 1 then begin
+            if n.p1_pos0 >= 0 then p1_pos1 := !p1_pos0 mod 2             (* p1_pos0 + p1_pos1 = pair *)
+            else p1_pos0 := 1 + (!p1_pos1 mod 2)                         (* p1_pos0 + p1_pos1 = impair *)
+        end;
+
+        (* De même pour P2 *)
+        if b2 + r2 = 1 then begin
+            if n.p2_pos0 >= 0 then p2_pos1 := !p2_pos0 mod 2             (* p2_pos0 + p2_pos1 = pair *)
+            else p2_pos0 := 1 + (!p2_pos1 mod 2)                         (* p2_pos0 + p2_pos1 = impair *)
+        end;
+
+        !p1_pos0 lor 
+        (!p1_pos1 lsl 4) lor 
+        (!p2_pos0 lsl 8) lor
+        (!p2_pos1 lsl 12) lor
         (b1 lsl 16) lor
         (r1 lsl 17) lor
         (b2 lsl 18) lor
         (r2 lsl 19) lor
-        ((match p with | P1 -> 0 | P2 -> 1) lsl 20) lor
-        (!blue_num lsl 21)
+        ((match n.p with | P1 -> 0 | P2 -> 1) lsl 20) lor
+        ((if (match n.p with | P1 -> n.p1_0_is_blue | P2 -> n.p2_0_is_blue) then 1 else 0) lsl 21)
+
 
 end 
 
@@ -670,7 +574,7 @@ end
 
 module UserInterface = struct 
 
-    let rec user_alternative ({p; b; _} as n : node) : alternative = 
+    let rec user_alternative (n : node) : alternative = 
         (* demande à l'utilisateur de rentrer un coup, puis renvoie ce coup s'il est correct, sinon
             elle s'appelle récursivement. *)
         let explode (str : string) : char list = 
@@ -719,7 +623,9 @@ module UserInterface = struct
                 let k_from = (List.nth i_j_list 1)*Config.board_width+(List.nth i_j_list 0) in (* Le fait que ce ne soit pas optimale d'utiliser une liste ici n'est pas grave. *)
                 let k_to   = (List.nth i_j_list 3)*Config.board_width+(List.nth i_j_list 2) in (* En effet, la liste est de taille constante (4) et cette fonction n'est appelée 
                                                                                 que très rarement : quand un utilisateur entre un coup. *)
-                if GameTree.on_the_board k_from k_to && (Tools.current_ghost_fn p b.[k_from] && not(Tools.current_ghost_fn p b.[k_to])) then
+                let target_is_friendly = if n.p = P1 then (k_to = n.p1_pos0 || k_to = n.p1_pos1) else (k_to = n.p2_pos0 || k_to = n.p2_pos1) in
+                let from_is_friendly = if n.p = P1 then (k_from = n.p1_pos0 || k_from = n.p1_pos1) else (k_from = n.p2_pos0 || k_from = n.p2_pos1) in
+                if GameTree.on_the_board k_from k_to && from_is_friendly && not target_is_friendly then
                     (k_from, k_to)
                 else
                     failwith "Les règles n'autorisent pas ce coup.\n"
@@ -748,19 +654,19 @@ module UserInterface = struct
         Printf.printf "Voulez-voir la couleur des fantômes adverses ? ('1' : oui, '0': non) \n";
         let visible = 
             try read_int () == 1 with Failure _ -> raise IncorrectAnswer in
-        let rec play_game ({p; b; b1; r1; b2; r2} as n : node) (g : game): unit = 
+        let rec play_game (n : node) (g : game): unit = 
             if GameTree.is_leaf n then (
                 Tools.print_node n;
                 Printf.printf "\n";
                 Tools.print_game g;
                 Printf.printf "\n";
-                match p, GameTree.payoff p n with 
+                match n.p, GameTree.payoff n.p n with 
                 | P1, 1. | P2, -1. -> Printf.printf "Le joueur P1 gagne la partie !\n"
                 | P1, -1. | P2, 1. -> Printf.printf "Le joueur P2 gagne la partie !\n"
                 | _ -> Printf.printf "Il y a égalité... Ce n'est pas possible dans ce jeu donc il y a une erreur dans le programme !\n"
             ) else 
                 let alt = 
-                    if p = user_player then (
+                    if n.p = user_player then (
                         if visible then 
                             Tools.print_node n
                         else 
@@ -786,14 +692,14 @@ module UserInterface = struct
         (* Deux stratégies (pures ou mixtes) s'affrontent avec un nombre de coups (total, pas chacun) limité à max_cnt.
         Sortie : Si la partie dépasse max_cnt coups, il y a égalité : None est renvoyée. Sinon Some (le joueur gagnant) 
             est renvoyée *)
-        let rec play_game ({p; b; b1; r1; b2; r2} as n : node) (cnt : int) (g: game): player option= 
+        let rec play_game (n : node) (cnt : int) (g: game): player option= 
             if GameTree.is_leaf n || cnt > max_cnt then (
-                match p, GameTree.payoff p n with 
+                match n.p, GameTree.payoff n.p n with 
                 | P1, 1. | P2, -1. -> Some P1
                 | P1, -1. | P2, 1. -> Some P2
                 | _ -> None
             ) else 
-                let alt = pick_alternative (match p with P1 -> p1_str g n | P2 -> p2_str g n) in 
+                let alt = pick_alternative (match n.p with P1 -> p1_str g n | P2 -> p2_str g n) in 
                 let g' = if List.length g < 2 then (0, -1)::g else alt::g in
                 play_game (GameTree.descend alt n) (cnt+1) g' in 
         play_game GameTree.root 0 []
@@ -801,19 +707,18 @@ module UserInterface = struct
     let show_strategy_against_strategy (p1_str : strategy) (p2_str : strategy) (max_cnt : int) : player option = 
         (* C'est exactement la même fonction que strategy_against_strategy, mais celle-ci affiche l'état du jeu entre 
             chaque coup. *)
-        let rec play_game ({p; b; b1; r1; b2; r2} as n : node) (cnt : int) (g : game): player option= 
-            Printf.printf "%s\n" b;
+        let rec play_game (n : node) (cnt : int) (g : game): player option= 
             Tools.print_node n;
             Printf.printf "\n";
             Tools.print_game g;
             Printf.printf "\n";
             if GameTree.is_leaf n || cnt > max_cnt then (
-                match p, GameTree.payoff p n with 
+                match n.p, GameTree.payoff n.p n with 
                 | P1, 1. | P2, -1. -> Some P1
                 | P1, -1. | P2, 1. -> Some P2
                 | _ -> None
             ) else 
-                let alt_probs = match p with P1 -> p1_str g n | P2 -> p2_str g n in 
+                let alt_probs = match n.p with P1 -> p1_str g n | P2 -> p2_str g n in 
                 Tools.print_list alt_probs (fun (alt, prob) -> Printf.printf "((%d,%d), %f)" (fst alt) (snd alt) prob);
                 print_newline ();
                 let alt = pick_alternative (alt_probs) in 
@@ -1113,4 +1018,6 @@ end
 
 
 
+
+let _,_ = IMP_MINIMAX.smooth_fictitious_play_with_time 60.0 5 600.0
 
