@@ -474,10 +474,20 @@ module GameTree = struct
                             if is_leaf n then 
                                 (n, w, g)::acc
                             else
-                              (List.map (fun opp_alt -> 
-                                  descend opp_alt n, 
-                                  w *. (List.assoc opp_alt (avg_opp_str g (convert_to_info_set [(n, w)]))),
-                                  if fst opp_alt < 0 then (0, -1)::g else opp_alt::g) (alternatives [(n, w)]) )@acc ) 
+                                let opp_alts = alternatives [(n, w)] in
+                                let info_set_n = convert_to_info_set [(n, w)] in
+                                let opp_strat_alt_probs = avg_opp_str g info_set_n in
+                                
+                                List.fold_left (fun sub_acc opp_alt -> 
+                                    let prob_w = List.assoc opp_alt opp_strat_alt_probs 
+                                    in
+                                    (
+                                        descend opp_alt n, 
+                                        w *. prob_w,
+                                        if fst opp_alt < 0 then (0, -1)::g else opp_alt::g
+                                    ) :: sub_acc
+                                ) acc opp_alts
+                            ) 
                         [] pi_set
                         ), alt)::acc
                 ) [] pi_sets_games_alts
@@ -790,17 +800,17 @@ module IMP_MINIMAX = struct
                 | Some (nodes_lst) -> Hashtbl.replace hash_table (g,c) 
                                                         ((n, w)::nodes_lst)
             ) l;
-            Hashtbl.fold (fun (g,c) nodes_lst (leaves, pi_sets) -> 
+            Hashtbl.fold (fun (g,c) nodes_lst (leaves_acc, pi_sets_acc) -> 
                     let new_leaves, piset = 
-                        List.fold_left (fun (leaves, piset) (n, w) -> 
+                        List.fold_left (fun (l_acc, p_acc) (n, w) -> 
                             if GameTree.is_leaf n then 
-                                (Leaf (n,w,g))::leaves, piset 
-                            else leaves,(n,w)::piset) 
-                            ([], []) nodes_lst in 
-                    new_leaves@leaves, 
+                                (Leaf (n,w,g))::l_acc, p_acc 
+                            else l_acc, (n,w)::p_acc) 
+                            (leaves_acc, []) nodes_lst in 
+                    new_leaves, 
                     match piset with 
-                    | [] -> pi_sets 
-                    | _ -> (PI_Set (piset, g)::pi_sets)
+                    | [] -> pi_sets_acc 
+                    | _ -> (PI_Set (piset, g)::pi_sets_acc)
             ) hash_table ([], [])
     
     let epsilon = 0.05 
@@ -859,7 +869,7 @@ module IMP_MINIMAX = struct
     let imp_minimax (avg_opp_str : strategy) (p : player) 
             (my_last_str : strategy) (max_depth : int) (lambda : float): 
             float * strategy * (game * int, (alternative * float) list) Hashtbl.t =
-        let h = Hashtbl.create (1 lsl 10) in 
+        let h = Hashtbl.create (1 lsl 15) in 
         let score = 
             match p with 
             | P1 -> 
@@ -944,8 +954,8 @@ module IMP_MINIMAX = struct
     let smooth_fictitious_play (nb_rounds : int) (depth : int) 
                                 (lambda : float) : strategy * strategy = 
         Printf.printf "Création des stratégies aléatoires initiales.\n";
-        let avg_h_p1 = Hashtbl.create (1 lsl 15) in 
-        let avg_h_p2 = Hashtbl.create (1 lsl 15) in
+        let avg_h_p1 = Hashtbl.create (1 lsl 20) in 
+        let avg_h_p2 = Hashtbl.create (1 lsl 20) in
         let last_p1_str = ref (Strategy.create_uniform_strategy ()) in 
         let last_p2_str = ref (Strategy.create_uniform_strategy ()) in
 
@@ -983,8 +993,8 @@ module IMP_MINIMAX = struct
 
         let stop_time = Sys.time () +. time in
         Printf.printf "Création des stratégies aléatoires initiales.\n";
-        let avg_h_p1 = Hashtbl.create (1 lsl 15) in 
-        let avg_h_p2 = Hashtbl.create (1 lsl 15) in
+        let avg_h_p1 = Hashtbl.create (1 lsl 20) in 
+        let avg_h_p2 = Hashtbl.create (1 lsl 20) in
         let last_p1_str = ref (Strategy.create_uniform_strategy ()) in 
         let last_p2_str = ref (Strategy.create_uniform_strategy ()) in
 
