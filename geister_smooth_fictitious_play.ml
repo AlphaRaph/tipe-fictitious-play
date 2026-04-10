@@ -219,21 +219,6 @@ module Tools = struct
             print_game g;
             Printf.printf ")")
         | _ -> ()
-
-    let random_element_from_queue (type a) (q : a Queue.t) : a =
-        let n = Queue.length q in
-        if n = 0 then invalid_arg "random_element_from_queue: empty queue";
-        let idx = Random.int n in
-        (* On fait une itération sans modifier la queue *)
-        let i = ref 0 in
-        let result = ref None in
-        Queue.iter (fun x ->
-            if !i = idx then result := Some x;
-            incr i
-        ) q;
-        match !result with
-        | Some x -> x
-        | None -> failwith "Unexpected error in random_element_from_queue"
 end      
 
 
@@ -380,6 +365,19 @@ module GameTree = struct
         && not (k_from mod Config.board_width = 0 && k_to - k_from = -1) 
         && not (k_from mod Config.board_width = (Config.board_width-1) && k_to - k_from = 1) 
 
+    let is_leaf (n : node) : bool = 
+        (*  entrée : un noeud
+            sortie : true ssi le noeud est une feuille, i.e la partie est terminée dans ce noeud.  *)
+        let pos_b1, pos_r1 = if n.p1_0_is_blue then n.p1_pos0, n.p1_pos1 else n.p1_pos1, n.p1_pos0 in
+        let pos_b2, pos_r2 = if n.p2_0_is_blue then n.p2_pos0, n.p2_pos1 else n.p2_pos1, n.p2_pos0 in
+        List.mem pos_b1 Config.p1_exit_cases || 
+        List.mem pos_b2 Config.p2_exit_cases || 
+        (pos_b1 < 0 && pos_r1 >= 0) || 
+        (pos_r1 < 0 && pos_b1 >= 0) || 
+        (pos_b2 < 0 && pos_r2 >= 0) || 
+        (pos_r2 < 0 && pos_b2 >= 0) 
+
+
     let alternatives (x_set : pi_set) : alternative list = 
         (* sortie : la liste des coups possibles depuis un ensemble d'information partielle.*)
 
@@ -387,12 +385,10 @@ module GameTree = struct
                                         pour déterminer les coups jouables puisque chacun 
                                         des noeuds ont les mêmes coups possibles étant donné
                                         qu'ils appartiennent au même PI-Set *)
-        let alive = (if n.p1_pos0 >= 0 then 1 else 0) + (if n.p1_pos1 >= 0 then 1 else 0) + (if n.p2_pos0 >= 0 then 1 else 0) + (if n.p2_pos1 >= 0 then 1 else 0) in
-        if alive = 3 then []  (* partie terminée -> pas de coups possibles *)
-        else if alive <= 2 then (   (* début de partie -> les coups possibles sont des dispositions de fantômes.*)
-            assert (Placement.is_placement_node n);
+        if is_leaf n then [] (* partie terminée -> pas de coups possibles *)
+        else if Placement.is_placement_node n then   (* début de partie -> les coups possibles sont des dispositions de fantômes.*)
             List.init (Placement.number_of_init_possible_placements) (fun i -> (-i-1, 0))
-        ) else
+        else
         let p_ghosts = if n.p = P1 then [n.p1_pos0; n.p1_pos1] else [n.p2_pos0; n.p2_pos1] in
         let all_p_ghosts = List.filter (fun x -> x >= 0) p_ghosts in
         
@@ -418,17 +414,6 @@ module GameTree = struct
 
 
 
-    let is_leaf (n : node) : bool = 
-        (*  entrée : un noeud
-            sortie : true ssi le noeud est une feuille, i.e la partie est terminée dans ce noeud.  *)
-        let pos_b1, pos_r1 = if n.p1_0_is_blue then n.p1_pos0, n.p1_pos1 else n.p1_pos1, n.p1_pos0 in
-        let pos_b2, pos_r2 = if n.p2_0_is_blue then n.p2_pos0, n.p2_pos1 else n.p2_pos1, n.p2_pos0 in
-        List.mem pos_b1 Config.p1_exit_cases || 
-        List.mem pos_b2 Config.p2_exit_cases || 
-        (pos_b1 < 0 && pos_r1 >= 0) || 
-        (pos_r1 < 0 && pos_b1 >= 0) || 
-        (pos_b2 < 0 && pos_r2 >= 0) || 
-        (pos_r2 < 0 && pos_b2 >= 0) 
 
 
     let payoff (p : player) (n : node) : float = 
@@ -467,7 +452,7 @@ module GameTree = struct
         chacun un ensemble d'information différent pour l'adversaire. *)
 
         (* Etape 3 : on récupère chacun des ensembles (qui ne sont plus des ensembles d'information) 
-        découlant de l'alternative choisie par le joueur adverse sous la stratégie pi *)
+        découlant de l'alternative choisipi_setse par le joueur adverse sous la stratégie pi *)
         List.fold_left (fun acc (pi_set, g, alt) -> 
                     (Set (List.fold_left  
                         (fun acc (n, w) -> 
@@ -687,10 +672,8 @@ module UserInterface = struct
                         Tools.print_list alt_probs (fun (alt, prob) -> Printf.printf "((%d,%d), %f)" (fst alt) (snd alt) prob);
                         print_newline ();
                         pick_alternative alt_probs in 
-                let g' = if List.length g < 2 then (0, -1)::g else alt::g in (* Ici est la différence entre user_against_pure_strategy
-                                                                                et user_against_mixt_strategy : pour mixt strategy il
-                                                                                ne faut pas dévoiler la disposition des fantômes, c'est
-                                                                                pourquoi l'on met (0, -1) dans les coups joués au début. *)
+                let g' = if fst alt < 0 then (0, -1)::g else alt::g in (* Il ne faut pas dévoiler la disposition des fantômes, c'est
+                                                                        pourquoi l'on met (0, -1) dans les coups joués au début. *)
                 play_game (GameTree.descend alt n) g' in 
         play_game GameTree.root []
 
@@ -698,81 +681,50 @@ module UserInterface = struct
             Printf.printf "Veuillez renseigner '0' ou '1'.\n"; 
             user_against_strategy pi user_player
 
-    let strategy_against_strategy (p1_str : strategy) (p2_str : strategy) (max_cnt : int): player option = 
-        (* Deux stratégies (pures ou mixtes) s'affrontent avec un nombre de coups (total, pas chacun) limité à max_cnt.
-        Sortie : Si la partie dépasse max_cnt coups, il y a égalité : None est renvoyée. Sinon Some (le joueur gagnant) 
-            est renvoyée *)
-        let rec play_game (n : node) (cnt : int) (g: game): player option= 
-            if GameTree.is_leaf n || cnt > max_cnt then (
-                match n.p, GameTree.payoff n.p n with 
-                | P1, 1. | P2, -1. -> Some P1
-                | P1, -1. | P2, 1. -> Some P2
-                | _ -> None
-            ) else 
+    let strategy_against_strategy (p1_str : strategy) (p2_str : strategy) (depth : int): float = 
+        (* Deux stratégies (pures ou mixtes) s'affrontent avec un nombre de coups (total, pas chacun) limité à depth.
+        Sortie : Si la partie dépasse depth coups, il y a égalité : 0.0 est renvoyé. Sinon 1.0 pour P1 gagnant et 
+        -1.0 pour P1 perdant est renvoyé *)
+        let rec play_game (n : node) (cnt : int) (g: game): float = 
+            if GameTree.is_leaf n then 
+                GameTree.payoff P1 n
+            else if cnt >= depth then 
+                0.0
+            else 
                 let alt = pick_alternative (match n.p with P1 -> p1_str g n | P2 -> p2_str g n) in 
-                let g' = if List.length g < 2 then (0, -1)::g else alt::g in
+                let g' = if fst alt < 0 then (0, -1)::g else alt::g in
                 play_game (GameTree.descend alt n) (cnt+1) g' in 
         play_game GameTree.root 0 []
 
-    let show_strategy_against_strategy (p1_str : strategy) (p2_str : strategy) (max_cnt : int) : player option = 
+    let show_strategy_against_strategy (p1_str : strategy) (p2_str : strategy) (depth : int) : float = 
         (* C'est exactement la même fonction que strategy_against_strategy, mais celle-ci affiche l'état du jeu entre 
             chaque coup. *)
-        let rec play_game (n : node) (cnt : int) (g : game): player option= 
+        let rec play_game (n : node) (cnt : int) (g : game): float = 
             Tools.print_node n;
             Printf.printf "\n";
             Tools.print_game g;
             Printf.printf "\n";
-            if GameTree.is_leaf n || cnt > max_cnt then (
-                match n.p, GameTree.payoff n.p n with 
-                | P1, 1. | P2, -1. -> Some P1
-                | P1, -1. | P2, 1. -> Some P2
-                | _ -> None
-            ) else 
+            if GameTree.is_leaf n then 
+                GameTree.payoff P1 n 
+            else if cnt >= depth then
+                0.0
+            else 
                 let alt_probs = match n.p with P1 -> p1_str g n | P2 -> p2_str g n in 
                 Tools.print_list alt_probs (fun (alt, prob) -> Printf.printf "((%d,%d), %f)" (fst alt) (snd alt) prob);
                 print_newline ();
                 let alt = pick_alternative (alt_probs) in 
-                let g' = if List.length g < 2 then (0, -1)::g else alt::g in
+                let g' = if fst alt < 0 then (0, -1)::g else alt::g in
                 play_game (GameTree.descend alt n) (cnt+1) g' in 
         play_game GameTree.root 0 []
     
-    let test_strategies (p1_str : strategy) (p2_str: strategy) (max_cnt : int) : float * float = 
-        (*  Fait s'affronter les stratégies p1_str et p2_str max_cnt fois
-            Sortie : (taux de victoire de P1, taux de victoire de P2) *)
-        let nb_of_tests = 1000 in
-        let p1_wins = ref 0 in 
-        let p2_wins = ref 0 in
-        let draws = ref 0 in 
-        for cnt = 1 to nb_of_tests do 
-            match strategy_against_strategy p1_str p2_str max_cnt with  
-            | None -> incr draws
-            | Some P1 -> incr p1_wins
-            | Some P2 -> incr p2_wins
+    let test_strategies (p1_str : strategy) (p2_str: strategy) (nb_simul : int) (depth : int) : float = 
+        (*  Fait s'affronter les stratégies p1_str et p2_str nb_simul fois
+            Sortie : le score de P1, i.e. la somme des résultats pour P1 divisé par nb_simul. *)
+        let score = ref 0. in 
+        for cnt = 1 to nb_simul do 
+            score := !score +. (strategy_against_strategy p1_str p2_str depth)
         done;
-        let score1 =  ((float !p1_wins) /. (float nb_of_tests)) in 
-        let score2 = ((float !p2_wins) /. (float nb_of_tests)) in 
-        let scoreDraw = ((float !draws) /. (float nb_of_tests)) in
-        Printf.printf " Realité : P1 : %f, P2 : %f, nulle : %f.\n" score1 score2 scoreDraw;
-        score1, score2
-
-    let test_average_strategies (p1_strs : strategy Queue.t) (p2_strs: strategy Queue.t) (max_cnt : int) : float * float = 
-        (*  Fait s'affronter les stratégies p1_strs et p2_strs max_cnt fois
-            Sortie : (taux de victoire de P1, taux de victoire de P2) *)
-        let nb_of_tests = 1000 in
-        let p1_wins = ref 0 in 
-        let p2_wins = ref 0 in
-        let draws = ref 0 in 
-        for cnt = 1 to nb_of_tests do 
-            match strategy_against_strategy (Tools.random_element_from_queue p1_strs) (Tools.random_element_from_queue p2_strs) max_cnt with  
-            | None -> incr draws
-            | Some P1 -> incr p1_wins
-            | Some P2 -> incr p2_wins
-        done;
-        let score1 =  ((float !p1_wins) /. (float nb_of_tests)) in 
-        let score2 = ((float !p2_wins) /. (float nb_of_tests)) in 
-        let scoreDraw = ((float !draws) /. (float nb_of_tests)) in
-        Printf.printf " Realité : P1 : %f, P2 : %f, nulle : %f.\n" score1 score2 scoreDraw;
-        score1, score2
+        !score /. (float nb_simul)
 end
 
 
@@ -842,12 +794,12 @@ module IMP_MINIMAX = struct
             else begin
             
             let children = GameTree.opg_children avg_opp_str x_pi_set g in 
-            let alt_probs = List.map (fun (y_set, alt) -> alt, value p avg_opp_str 
-                y_set (depth+1) h max_depth lambda) children in
-            Hashtbl.add h (g, code) (softmax alt_probs lambda);
+            let alt_scores = List.map (fun (y_set, alt) -> alt, value p avg_opp_str 
+                y_set (depth+2) h max_depth lambda) children in
+            Hashtbl.add h (g, code) (softmax alt_scores lambda);
             List.fold_left 
                 (fun best_score (alt, score) -> max best_score score) 
-                neg_infinity alt_probs
+                neg_infinity alt_scores
             end
         | Set l -> 
             let leaves, pi_sets = partition x_set in 
@@ -855,8 +807,11 @@ module IMP_MINIMAX = struct
             List.fold_left (fun sum sset -> 
                 match sset with 
                 | PI_Set _| Set _ -> 
-                    failwith "partition est ne fonctionne pas correctement."
+                    failwith "partition ne fonctionne pas correctement."
                 | Leaf (leaf, w, g) ->
+                    (* tant pis : on a la réponse avec un coup de plus, la partie s'arrête ici
+                    donc il ne faut pas la prendre en compte. *)
+                    if (leaf.p = p && depth > max_depth) then sum else
                     let score = w *. (GameTree.payoff p leaf)  in 
                     sum +. score
                     ) 0. leaves 
@@ -864,7 +819,8 @@ module IMP_MINIMAX = struct
             List.fold_left (fun sum x -> 
                 let score = value p avg_opp_str x depth h max_depth lambda in 
                 sum +. score) 0. pi_sets
-        | Leaf (leaf,w, g) -> w *. (GameTree.payoff p leaf)
+        | Leaf (leaf,w, g) ->
+            failwith "Cas impossible dans la fonction value."
 
     let imp_minimax (avg_opp_str : strategy) (p : player) 
             (my_last_str : strategy) (max_depth : int) (lambda : float): 
@@ -873,8 +829,8 @@ module IMP_MINIMAX = struct
         let score = 
             match p with 
             | P1 -> 
-                value P1 avg_opp_str (Set [(GameTree.root, 1., [])]) 
-                    0 h max_depth lambda
+                let x = (Set [(GameTree.root, 1., [])]) in 
+                value P1 avg_opp_str x 0 h max_depth lambda
             | P2 ->
                 let x = Set (List.map 
                     (fun opp_alt -> 
@@ -884,7 +840,7 @@ module IMP_MINIMAX = struct
                     ) 
                     (GameTree.alternatives [(GameTree.root, 1.)]) 
                 ) in
-                value P2 avg_opp_str x 0 h max_depth lambda
+                value P2 avg_opp_str x 1 h max_depth lambda
         in 
         score, Strategy.create_strategy h my_last_str, h
 
@@ -1001,33 +957,65 @@ module IMP_MINIMAX = struct
         let avg_p1_str = ref !last_p1_str in
         let avg_p2_str = ref !last_p2_str in
 
+        let score_pure1 = ref 0. in 
+        let score_pure2 = ref 0. in 
+        let score_mixt1 = ref 0. in
+        let score_mixt2 = ref 0. in 
+
         Printf.printf "Stratégies aléatoires intiales créées.\n";
         let round = ref 1 in
         while Sys.time () < stop_time do
-            let score1, new_p1_str, h1 = imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
+            let new_score_pure1, new_p1_str, h1 = imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
+            score_pure1 := new_score_pure1;
             last_p1_str := new_p1_str;
+
+            score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
+            score_mixt2 := -.(!score_mixt1);
+            let regret_p1 = !score_pure1 -. !score_mixt1 in
+            let regret_p2 = !score_pure2 -. !score_mixt2 in
+            let exploitability = regret_p1 +. regret_p2 in 
+            Printf.printf "Tour %d prof %d : p1_str_%d, meilleure réponse à p2_str_%d, calculée.\n" !round depth !round (!round - 1);
+            Printf.printf "Pour le profil (p1_str_%d, p2_str_%d) : \n" (!round - 1) (!round - 1);
+            Printf.printf "Regret de P1 : %f\n" regret_p1;
+            if !round > 1 then begin 
+                Printf.printf "Regret de P2 : %f\n" regret_p2;
+                Printf.printf "Exploitabilité : %f\n" exploitability;
+            end else begin 
+                Printf.printf "Regret de P2 : Non disponible au tour 1\n";
+                Printf.printf "Exploitabilité : Non disponible au tour 1\n";
+            end;
+            Printf.printf "Temps restant : %fs\n" (stop_time -. Sys.time ());
+            Printf.printf "\n";
+            flush stdout;
+
             update_average_strategy avg_h_p1 h1 !round;
             avg_p1_str := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
 
-            Printf.printf "Tour %d prof %d : P1 répond à P2 avec %f. Temps restant : %fs\n" 
-                !round depth score1 (stop_time -. Sys.time ());
+
+
+            let new_score_pure2, new_p2_str, h2 = imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
+            score_pure2 := new_score_pure2;
+            last_p2_str := new_p2_str;
+            
+            score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
+            score_mixt2 := -.(!score_mixt1);
+            let regret_p1 = !score_pure1 -. !score_mixt1 in
+            let regret_p2 = !score_pure2 -. !score_mixt2 in
+            let exploitability = regret_p1 +. regret_p2 in 
+            Printf.printf "Tour %d prof %d : p2_str_%d, meilleure réponse à p1_str_%d, calculée.\n" !round depth !round !round;
+            Printf.printf "Pour le profil (p1_str_%d, p2_str_%d) : \n" !round (!round - 1);
+            Printf.printf "Regret de P1 : %f\n" regret_p1;
+            Printf.printf "Regret de P2 : %f\n" regret_p2;
+            Printf.printf "Exploitabilité : %f\n" exploitability;
+            Printf.printf "Temps restant : %fs\n" (stop_time -. Sys.time ());
+            Printf.printf "\n";
             flush stdout;
 
-            let score2, new_p2_str, h2 = imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
-            last_p2_str := new_p2_str;
+
             update_average_strategy avg_h_p2 h2 !round;
             avg_p2_str := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
 
-            Printf.printf "Tour %d prof %d : P2 répond à P1 avec %f. Temps restant : %fs\n" 
-                !round depth score2 (stop_time -. Sys.time ());
-            flush stdout;
             incr round;
         done;
         !last_p1_str, !last_p2_str
 end
-
-
-
-
-let _,_ = IMP_MINIMAX.smooth_fictitious_play_with_time 60.0 5 600.0
-
