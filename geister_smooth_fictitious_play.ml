@@ -610,6 +610,112 @@ module Strategy = struct
 end 
 
 
+(* ============================================================
+   MODULE StrategyIO — Sauvegarde et chargement de stratégies
+   ============================================================ *)
+module StrategyIO = struct
+
+    (* Nom du fichier de données binaire (Marshal) *)
+    let dat_filename (strat_name : string) : string =
+        let version = Sys.ocaml_version in
+        Printf.sprintf "%s_hashtbl_ocamlv%s.dat" strat_name version
+
+    (* [save_hashtbl_strategy h strat_name]
+       Sauvegarde la table de hachage [h] dans un fichier binaire via Marshal,
+       puis génère un fichier .ml "wrapper" qui recharge cette table à l'exécution
+       et expose une fonction [alt_probs : game -> info_set -> (alternative * float) list].
+
+       Portabilité :
+       - Le flag [Marshal.Compat_32] est activé pour maximiser la compatibilité
+         entre architectures 32 et 64 bits.
+       - Le fichier .dat encode la version d'OCaml dans son nom : le wrapper
+         généré affiche un avertissement si la version courante ne correspond pas.
+       - Pour charger la stratégie sur une autre machine, copier ensemble
+         le fichier .dat ET le fichier .ml généré.
+    *)
+    let save_hashtbl_strategy
+            (h : ((game * int), (alternative * float) list) Hashtbl.t)
+            (strat_name : string) : unit =
+        let dir = "strategies" in
+        if not (Sys.file_exists dir) then ignore (Sys.command (Printf.sprintf "mkdir -p %s" dir));
+        let ocaml_version = Sys.ocaml_version in
+        let dat_basename = dat_filename strat_name in
+        let dat_file = dir ^ "/" ^ dat_basename in
+        let ml_file  = dir ^ "/" ^ strat_name ^ ".ml" in
+
+        (* 1. Sauvegarder la Hashtbl en binaire *)
+        let out = open_out_bin dat_file in
+        Marshal.to_channel out h [Marshal.Compat_32];
+        close_out out;
+        Printf.printf "[StrategyIO] Table sauvegardée dans '%s'.\n" dat_file;
+
+        (* 2. Générer le wrapper .ml *)
+        let oc = open_out ml_file in
+        Printf.fprintf oc "(* ============================================================\n";
+        Printf.fprintf oc "   Fichier généré automatiquement par StrategyIO.save_hashtbl_strategy\n";
+        Printf.fprintf oc "   Stratégie : %s\n" strat_name;
+        Printf.fprintf oc "   Version OCaml utilisée lors de la génération : %s\n" ocaml_version;
+        Printf.fprintf oc "\n";
+        Printf.fprintf oc "   IMPORTANT : Ce fichier doit être utilisé avec OCaml %s.\n" ocaml_version;
+        Printf.fprintf oc "   Le fichier de données binaires associé est : %s\n" dat_file;
+        Printf.fprintf oc "   Si vous utilisez une version d'OCaml différente, le chargement\n";
+        Printf.fprintf oc "   du fichier .dat échouera (format Marshal non portable entre versions).\n";
+        Printf.fprintf oc "   ============================================================ *)\n";
+        Printf.fprintf oc "\n";
+        Printf.fprintf oc "(* Chemin vers le fichier de données — à adapter si déplacé. *)\n";
+        Printf.fprintf oc "let _dat_file = \"%s\"\n" dat_file;
+        Printf.fprintf oc "let _expected_ocaml_version = \"%s\"\n" ocaml_version;
+        Printf.fprintf oc "\n";
+        Printf.fprintf oc "let () =\n";
+        Printf.fprintf oc "  if Sys.ocaml_version <> _expected_ocaml_version then\n";
+        Printf.fprintf oc "    Printf.eprintf\n";
+        Printf.fprintf oc "      \"[AVERTISSEMENT] Strategie '%s' compilee avec OCaml %s\\n\"\n" strat_name ocaml_version;
+        Printf.fprintf oc "      |> ignore;\n";
+        Printf.fprintf oc "    Printf.eprintf\n";
+        Printf.fprintf oc "      \"mais vous utilisez OCaml %%s. Le fichier .dat risque d'etre incompatible.\\n\"\n";
+        Printf.fprintf oc "      Sys.ocaml_version\n";
+        Printf.fprintf oc "\n";
+        Printf.fprintf oc "(* Chargement de la table de hachage depuis le fichier binaire. *)\n";
+        Printf.fprintf oc "let _h : ((game * int), (alternative * float) list) Hashtbl.t =\n";
+        Printf.fprintf oc "  let ic = open_in_bin _dat_file in\n";
+        Printf.fprintf oc "  let tbl = (Marshal.from_channel ic\n";
+        Printf.fprintf oc "    : ((game * int), (alternative * float) list) Hashtbl.t) in\n";
+        Printf.fprintf oc "  close_in ic; tbl\n";
+        Printf.fprintf oc "\n";
+        Printf.fprintf oc "(* Strategie de secours : distribution uniforme sur les alternatives. *)\n";
+        Printf.fprintf oc "let _uniform (g : game) (i : info_set) : (alternative * float) list =\n";
+        Printf.fprintf oc "  ignore g;\n";
+        Printf.fprintf oc "  let alts = GameTree.alternatives [(i, 1.)] in\n";
+        Printf.fprintf oc "  let n = List.length alts in\n";
+        Printf.fprintf oc "  List.map (fun alt -> (alt, 1. /. float n)) alts\n";
+        Printf.fprintf oc "\n";
+        Printf.fprintf oc "(** [alt_probs g i] renvoie la distribution de probabilites sur les\n";
+        Printf.fprintf oc "    alternatives disponibles dans l'etat d'information [i] apres la\n";
+        Printf.fprintf oc "    partie [g]. Utilise la table precalculee ; retombe sur la\n";
+        Printf.fprintf oc "    distribution uniforme si l'etat n'a pas ete explore. *)\n";
+        Printf.fprintf oc "let alt_probs (g : game) (i : info_set) : (alternative * float) list =\n";
+        Printf.fprintf oc "  match Hashtbl.find_opt _h (g, Encoding.encode i) with\n";
+        Printf.fprintf oc "  | Some probs -> probs\n";
+        Printf.fprintf oc "  | None       -> _uniform g i\n";
+        close_out oc;
+        Printf.printf "[StrategyIO] Wrapper OCaml généré dans '%s'.\n" ml_file
+
+    (* [load_hashtbl_strategy dat_file]
+       Recharge une Hashtbl sauvegardée via [save_hashtbl_strategy].
+       Utile pour reconstruire une stratégie directement en mémoire
+       sans passer par le fichier wrapper .ml.
+       Exemple : let h = StrategyIO.load_hashtbl_strategy "hashtbl_bot1_ocamlv5.4.1.dat"
+                 let bot1 = Strategy.create_strategy h (Strategy.create_uniform_strategy ()) *)
+    let load_hashtbl_strategy (dat_file : string)
+            : ((game * int), (alternative * float) list) Hashtbl.t =
+        let ic = open_in_bin dat_file in
+        let tbl = (Marshal.from_channel ic
+            : ((game * int), (alternative * float) list) Hashtbl.t) in
+        close_in ic;
+        Printf.printf "[StrategyIO] Table chargée depuis '%s'.\n" dat_file;
+        tbl
+
+end
 
 
 
@@ -991,7 +1097,7 @@ module IMP_MINIMAX = struct
 
 
     let smooth_fictitious_play_with_time (time : float) (depth : int) 
-        (lambda : float) : strategy * strategy = 
+        (lambda : float) : unit = 
         (* 709.0 est la valeur maximale de lambda *)
 
         let stop_time = Sys.time () +. time in
@@ -1010,8 +1116,8 @@ module IMP_MINIMAX = struct
         let score_mixt2 = ref 0. in 
 
         Printf.printf "Stratégies aléatoires intiales créées.\n";
-        let round = ref 1 in
-        while Sys.time () < stop_time do
+
+        let rec loop (round : int) : int = 
             let new_score_pure1, new_p1_str, h1 = imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
             score_pure1 := new_score_pure1;
             last_p1_str := new_p1_str;
@@ -1021,10 +1127,10 @@ module IMP_MINIMAX = struct
             let regret_p1 = !score_pure1 -. !score_mixt1 in
             let regret_p2 = !score_pure2 -. !score_mixt2 in
             let exploitability = regret_p1 +. regret_p2 in 
-            Printf.printf "Tour %d prof %d : p1_str_%d, meilleure réponse à p2_str_%d, calculée.\n" !round depth !round (!round - 1);
-            Printf.printf "Pour le profil (p1_str_%d, p2_str_%d) : \n" (!round - 1) (!round - 1);
+            Printf.printf "Tour %d prof %d : p1_str_%d, meilleure réponse à p2_str_%d, calculée.\n" round depth round (round - 1);
+            Printf.printf "Pour le profil (p1_str_%d, p2_str_%d) : \n" (round - 1) (round - 1);
             Printf.printf "Regret de P1 : %f\n" regret_p1;
-            if !round > 1 then begin 
+            if round > 1 then begin 
                 Printf.printf "Regret de P2 : %f\n" regret_p2;
                 Printf.printf "Exploitabilité : %f\n" exploitability;
             end else begin 
@@ -1035,9 +1141,12 @@ module IMP_MINIMAX = struct
             Printf.printf "\n";
             flush stdout;
 
-            update_average_strategy avg_h_p1 h1 !round;
-            avg_p1_str := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
+            if (Sys.time () >= stop_time) then
+                round - 1
+            else begin
 
+            update_average_strategy avg_h_p1 h1 round;
+            avg_p1_str := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
 
 
             let new_score_pure2, new_p2_str, h2 = imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
@@ -1049,8 +1158,8 @@ module IMP_MINIMAX = struct
             let regret_p1 = !score_pure1 -. !score_mixt1 in
             let regret_p2 = !score_pure2 -. !score_mixt2 in
             let exploitability = regret_p1 +. regret_p2 in 
-            Printf.printf "Tour %d prof %d : p2_str_%d, meilleure réponse à p1_str_%d, calculée.\n" !round depth !round !round;
-            Printf.printf "Pour le profil (p1_str_%d, p2_str_%d) : \n" !round (!round - 1);
+            Printf.printf "Tour %d prof %d : p2_str_%d, meilleure réponse à p1_str_%d, calculée.\n" round depth round round;
+            Printf.printf "Pour le profil (p1_str_%d, p2_str_%d) : \n" round (round - 1);
             Printf.printf "Regret de P1 : %f\n" regret_p1;
             Printf.printf "Regret de P2 : %f\n" regret_p2;
             Printf.printf "Exploitabilité : %f\n" exploitability;
@@ -1058,11 +1167,15 @@ module IMP_MINIMAX = struct
             Printf.printf "\n";
             flush stdout;
 
-
-            update_average_strategy avg_h_p2 h2 !round;
+            update_average_strategy avg_h_p2 h2 round;
             avg_p2_str := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
-
-            incr round;
-        done;
-        !last_p1_str, !last_p2_str
+            loop (round + 1) 
+            end
+        in
+        let round = loop 1 in
+        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%dl%.2f" round depth lambda);
+        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%dl%.2f" (round-1) depth lambda);
 end
+
+
+let () = IMP_MINIMAX.smooth_fictitious_play_with_time 20.0 10 100.0
