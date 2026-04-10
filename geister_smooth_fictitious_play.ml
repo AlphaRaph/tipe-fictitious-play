@@ -560,6 +560,53 @@ module Strategy = struct
             match Hashtbl.find_opt h (g, Encoding.encode i) with 
             | None -> last_str g i
             | Some alt_probs -> alt_probs
+
+    let create_random_strategy () : strategy = 
+        let h = Hashtbl.create (1 lsl 15) in 
+        fun (g : game) (i : info_set) -> 
+            let e = Encoding.encode i in 
+            match Hashtbl.find_opt h (g, e) with 
+            | None -> 
+                let alts = GameTree.alternatives [(i, 1.)] in 
+                let alt_probs =
+                let weights = List.map (fun alt -> (alt, Random.float 1.0)) alts in
+                let total = List.fold_left (fun acc (_, w) -> acc +. w) 0. weights in
+                List.map (fun (alt, w) -> (alt, w /. total)) weights
+                in begin
+                Hashtbl.add h (g,e) alt_probs;
+                alt_probs
+            end 
+            | Some alt_probs -> alt_probs
+
+    let create_random_pure_strategy () : strategy = 
+        let h = Hashtbl.create (1 lsl 15) in 
+        fun (g : game) (i : info_set) -> 
+            let e = Encoding.encode i in 
+            match Hashtbl.find_opt h (g, e) with 
+            | None -> 
+                let alts = GameTree.alternatives [(i, 1.)] in 
+                let alt_probs =
+                let chosen = List.nth alts (Random.int (List.length alts)) in
+                List.map (fun alt -> (alt, if alt = chosen then 1. else 0.)) alts
+                in begin
+                Hashtbl.add h (g,e) alt_probs;
+                alt_probs
+            end 
+            | Some alt_probs -> alt_probs
+
+    let convert_to_pure_strategy (str : strategy) : strategy = 
+        fun (g :game) (i : info_set) -> 
+            match str g i with 
+            | [] -> failwith "str g i est une liste vide."
+            | (alt, prob)::alt_probs' as alt_probs ->
+                let highest_alt, highest_prob = 
+                    List.fold_left (fun (highest_alt, highest_prob) (alt, prob) -> 
+                                        if prob > highest_prob then 
+                                            (alt, prob) 
+                                        else (highest_alt, highest_prob))
+                                    (alt, prob) alt_probs' in 
+                List.map (fun (alt, prob) -> if alt = highest_alt then (alt, 1.) else (alt, 0.)) alt_probs
+
 end 
 
 
