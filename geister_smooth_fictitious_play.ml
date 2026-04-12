@@ -1061,7 +1061,9 @@ module IMP_MINIMAX = struct
         ) new_h
 
     let smooth_fictitious_play (nb_rounds : int) (depth : int) 
-                                (lambda : float) : strategy * strategy = 
+                                (lambda : float) : unit = 
+        
+        let start_time = Sys.time () in 
         Printf.printf "Création des stratégies aléatoires initiales.\n";
         let avg_h_p1 = Hashtbl.create (1 lsl 20) in 
         let avg_h_p2 = Hashtbl.create (1 lsl 20) in
@@ -1071,36 +1073,94 @@ module IMP_MINIMAX = struct
         let avg_p1_str = ref !last_p1_str in
         let avg_p2_str = ref !last_p2_str in
 
+        let score_pure1 = ref 0. in 
+        let score_pure2 = ref 0. in 
+        let score_mixt1 = ref 0. in
+        let score_mixt2 = ref 0. in 
         Printf.printf "Stratégies aléatoires intiales créées.\n";
-        for round = 1 to nb_rounds do 
-            let score1, new_p1_str, h1 = 
-                imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
+
+        (* -- Logging -- *)
+        let _ = Sys.command "mkdir -p reports" in
+        let fname = Printf.sprintf "sfp_t%dd%dl%.1f" nb_rounds depth lambda in
+        let txt_oc = open_out ("reports/" ^ fname ^ ".txt") in
+        let csv_oc = open_out ("reports/" ^ fname ^ ".csv") in
+        let log s = 
+            output_string txt_oc s; 
+            flush txt_oc;
+            print_string s;
+            flush stdout
+        in
+        Printf.fprintf csv_oc "tour_p1,tour_p2,regret_p1,regret_p2,exploitabilite,temps_ecoule\n";
+
+        let rec loop (round : int) : int = 
+            let new_score_pure1, new_p1_str, h1 = imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
+            score_pure1 := new_score_pure1;
             last_p1_str := new_p1_str;
+
+            score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
+            score_mixt2 := -.(!score_mixt1);
+            let regret_p1 = !score_pure1 -. !score_mixt1 in
+            let regret_p2 = !score_pure2 -. !score_mixt2 in
+            let exploitability = regret_p1 +. regret_p2 in 
+            log (Printf.sprintf "Tour %d prof %d : p1_str_%d, meilleure réponse à p2_str_%d, calculée.\n" round depth round (round - 1));
+            log (Printf.sprintf "Pour le profil (p1_str_%d, p2_str_%d) : \n" (round - 1) (round - 1));
+            log (Printf.sprintf "Regret de P1 : %f\n" regret_p1);
+            if round > 1 then begin 
+                log (Printf.sprintf "Regret de P2 : %f\n" regret_p2);
+                log (Printf.sprintf "Exploitabilité : %f\n" exploitability);
+            end else begin 
+                log (Printf.sprintf "Regret de P2 : Non disponible au tour 1\n");
+                log (Printf.sprintf "Exploitabilité : Non disponible au tour 1\n");
+            end;
+            log (Printf.sprintf "Temps écoulé : %fs\n" (Sys.time () -. start_time));
+            log (Printf.sprintf "\n");
+            Printf.fprintf csv_oc "%d,%d,%f,%f,%f,%.3f\n"
+                round (round-1) regret_p1 regret_p2 exploitability (Sys.time () -. start_time);
+            flush csv_oc;
+
+            if (round = nb_rounds + 1) then
+                round - 1
+            else begin
+
             update_average_strategy avg_h_p1 h1 round;
             avg_p1_str := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
 
-            Printf.printf "Tour %d prof %d : P1 répond à P2 avec %f.\n" round 
-                            depth score1;
-            flush stdout;
 
-            let score2, new_p2_str, h2 = 
-                imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
+            let new_score_pure2, new_p2_str, h2 = imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
+            score_pure2 := new_score_pure2;
             last_p2_str := new_p2_str;
+            
+            score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
+            score_mixt2 := -.(!score_mixt1);
+            let regret_p1 = !score_pure1 -. !score_mixt1 in
+            let regret_p2 = !score_pure2 -. !score_mixt2 in
+            let exploitability = regret_p1 +. regret_p2 in 
+            log (Printf.sprintf "Tour %d prof %d : p2_str_%d, meilleure réponse à p1_str_%d, calculée.\n" round depth round round);
+            log (Printf.sprintf "Pour le profil (p1_str_%d, p2_str_%d) : \n" round (round - 1));
+            log (Printf.sprintf "Regret de P1 : %f\n" regret_p1);
+            log (Printf.sprintf "Regret de P2 : %f\n" regret_p2);
+            log (Printf.sprintf "Exploitabilité : %f\n" exploitability);
+            log (Printf.sprintf "Temps écoulé : %fs\n" (Sys.time () -. start_time));
+            log (Printf.sprintf "\n");
+            Printf.fprintf csv_oc "%d,%d,%f,%f,%f,%.3f\n"
+                round round regret_p1 regret_p2 exploitability (Sys.time () -. start_time);
+            flush csv_oc;
+
             update_average_strategy avg_h_p2 h2 round;
             avg_p2_str := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
-
-            Printf.printf "Tour %d prof %d : P2 répond à P1 avec %f.\n" round 
-                            depth score2;
-            flush stdout;
-        done;
-        !last_p1_str, !last_p2_str
+            loop (round + 1) 
+            end
+        in
+        let round = loop 1 in 
+        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%dl%.2f" round depth lambda);
+        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%dl%.2f" (round-1) depth lambda)
 
 
     let smooth_fictitious_play_with_time (time : float) (depth : int) 
         (lambda : float) : unit = 
-        (* 709.0 est la valeur maximale de lambda *)
 
-        let stop_time = Sys.time () +. time in
+        let start_time = Sys.time () in
+        let stop_time = start_time +. time in
         Printf.printf "Création des stratégies aléatoires initiales.\n";
         let avg_h_p1 = Hashtbl.create (1 lsl 20) in 
         let avg_h_p2 = Hashtbl.create (1 lsl 20) in
@@ -1117,6 +1177,19 @@ module IMP_MINIMAX = struct
 
         Printf.printf "Stratégies aléatoires intiales créées.\n";
 
+        (* -- Logging -- *)
+        let _ = Sys.command "mkdir -p reports" in
+        let fname = Printf.sprintf "sfp_time%.1fd%dl%.1f" time depth lambda in
+        let txt_oc = open_out ("reports/" ^ fname ^ ".txt") in
+        let csv_oc = open_out ("reports/" ^ fname ^ ".csv") in
+        let log s = 
+            output_string txt_oc s; 
+            flush txt_oc;
+            print_string s;
+            flush stdout
+        in
+        Printf.fprintf csv_oc "tour_p1,tour_p2,regret_p1,regret_p2,exploitabilite,temps_ecoule\n";
+
         let rec loop (round : int) : int = 
             let new_score_pure1, new_p1_str, h1 = imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
             score_pure1 := new_score_pure1;
@@ -1127,19 +1200,21 @@ module IMP_MINIMAX = struct
             let regret_p1 = !score_pure1 -. !score_mixt1 in
             let regret_p2 = !score_pure2 -. !score_mixt2 in
             let exploitability = regret_p1 +. regret_p2 in 
-            Printf.printf "Tour %d prof %d : p1_str_%d, meilleure réponse à p2_str_%d, calculée.\n" round depth round (round - 1);
-            Printf.printf "Pour le profil (p1_str_%d, p2_str_%d) : \n" (round - 1) (round - 1);
-            Printf.printf "Regret de P1 : %f\n" regret_p1;
+            log (Printf.sprintf "Tour %d prof %d : p1_str_%d, meilleure réponse à p2_str_%d, calculée.\n" round depth round (round - 1));
+            log (Printf.sprintf "Pour le profil (p1_str_%d, p2_str_%d) : \n" (round - 1) (round - 1));
+            log (Printf.sprintf "Regret de P1 : %f\n" regret_p1);
             if round > 1 then begin 
-                Printf.printf "Regret de P2 : %f\n" regret_p2;
-                Printf.printf "Exploitabilité : %f\n" exploitability;
+                log (Printf.sprintf "Regret de P2 : %f\n" regret_p2);
+                log (Printf.sprintf "Exploitabilité : %f\n" exploitability);
             end else begin 
-                Printf.printf "Regret de P2 : Non disponible au tour 1\n";
-                Printf.printf "Exploitabilité : Non disponible au tour 1\n";
+                log (Printf.sprintf "Regret de P2 : Non disponible au tour 1\n");
+                log (Printf.sprintf "Exploitabilité : Non disponible au tour 1\n");
             end;
-            Printf.printf "Temps restant : %fs\n" (stop_time -. Sys.time ());
-            Printf.printf "\n";
-            flush stdout;
+            log (Printf.sprintf "Temps écoulé : %fs\n" (Sys.time () -. start_time));
+            log (Printf.sprintf "\n");
+            Printf.fprintf csv_oc "%d,%d,%f,%f,%f,%.3f\n"
+                round (round-1) regret_p1 regret_p2 exploitability (Sys.time () -. start_time);
+            flush csv_oc;
 
             if (Sys.time () >= stop_time) then
                 round - 1
@@ -1158,14 +1233,16 @@ module IMP_MINIMAX = struct
             let regret_p1 = !score_pure1 -. !score_mixt1 in
             let regret_p2 = !score_pure2 -. !score_mixt2 in
             let exploitability = regret_p1 +. regret_p2 in 
-            Printf.printf "Tour %d prof %d : p2_str_%d, meilleure réponse à p1_str_%d, calculée.\n" round depth round round;
-            Printf.printf "Pour le profil (p1_str_%d, p2_str_%d) : \n" round (round - 1);
-            Printf.printf "Regret de P1 : %f\n" regret_p1;
-            Printf.printf "Regret de P2 : %f\n" regret_p2;
-            Printf.printf "Exploitabilité : %f\n" exploitability;
-            Printf.printf "Temps restant : %fs\n" (stop_time -. Sys.time ());
-            Printf.printf "\n";
-            flush stdout;
+            log (Printf.sprintf "Tour %d prof %d : p2_str_%d, meilleure réponse à p1_str_%d, calculée.\n" round depth round round);
+            log (Printf.sprintf "Pour le profil (p1_str_%d, p2_str_%d) : \n" round (round - 1));
+            log (Printf.sprintf "Regret de P1 : %f\n" regret_p1);
+            log (Printf.sprintf "Regret de P2 : %f\n" regret_p2);
+            log (Printf.sprintf "Exploitabilité : %f\n" exploitability);
+            log (Printf.sprintf "Temps écoulé : %fs\n" (Sys.time () -. start_time));
+            log (Printf.sprintf "\n");
+            Printf.fprintf csv_oc "%d,%d,%f,%f,%f,%.3f\n"
+                round round regret_p1 regret_p2 exploitability (Sys.time () -. start_time);
+            flush csv_oc;
 
             update_average_strategy avg_h_p2 h2 round;
             avg_p2_str := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
@@ -1173,9 +1250,8 @@ module IMP_MINIMAX = struct
             end
         in
         let round = loop 1 in
+        close_out txt_oc;
+        close_out csv_oc;
         StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%dl%.2f" round depth lambda);
-        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%dl%.2f" (round-1) depth lambda);
+        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%dl%.2f" (round-1) depth lambda)
 end
-
-
-let () = IMP_MINIMAX.smooth_fictitious_play_with_time 20.0 10 100.0
