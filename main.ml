@@ -71,6 +71,31 @@ let ask_float (prompt : string) : float =
 
 
 (* --------------------------------------------------------------------------
+   Utilitaire : demander un layout d'évolution lambda
+   -------------------------------------------------------------------------- *)
+let ask_schedule () : lambda_schedule =
+    Printf.printf "\nChoix de la progression de Lambda (Équilibre de Nash) :\n";
+    Printf.printf "  1. Constant       (lambda_t = C)\n";
+    Printf.printf "  2. Linéaire       (lambda_t = l_0 + (l_max - l_0) * t/N)\n";
+    Printf.printf "  3. Racine Carrée  (lambda_t = c * sqrt(t))\n";
+    Printf.printf "  4. Exponentielle  (lambda_t = l_0 * alpha^t)\n";
+    let choice = ask_int "Votre choix (1-4) : " in
+    match choice with
+    | 1 -> Constant (ask_float "Valeur constante de Lambda (ex: 0.1) : ")
+    | 2 -> 
+        let l0 = ask_float "Lambda initial (ex: 0.01) : " in
+        let lmax = ask_float "Lambda final (ex: 1.0) : " in
+        Linear (l0, lmax)
+    | 3 -> Sqrt (ask_float "Facteur de croissance 'c' (ex: 0.05) : ")
+    | 4 ->
+        let l0 = ask_float "Lambda initial (ex: 0.01) : " in
+        let alpha = ask_float "Alpha multiplicateur (ex: 1.05) : " in
+        Exponential (l0, alpha)
+    | _ -> Printf.printf "Choix invalide, par défaut Constant(0.1).\n"; Constant 0.1
+
+
+
+(* --------------------------------------------------------------------------
    Utilitaire : demander un fichier
    -------------------------------------------------------------------------- *)
 let ask_file (prompt : string) : string =
@@ -121,14 +146,14 @@ let mode_sfp_rounds () =
     Printf.printf "\n=== Smooth Fictitious Play (tours limités) ===\n\n";
     let nb_rounds = ask_int "Nombre de tours : " in
     let depth = ask_int "Profondeur : " in
-    let lambda = ask_float "Lambda (paramètre softmax) : " in
+    let sched = ask_schedule () in
     let ml_p1 = ask_file "Chemin du fichier stratégie initiale P1 (.ml) : " in
     let ml_p2 = ask_file "Chemin du fichier stratégie initiale P2 (.ml) : " in
     let init_p1 = load_strategy ml_p1 in
-    let init_p2 = load_strategy ml_p2 in
-    Printf.printf "\nLancement du Smooth Fictitious Play (%d tours, profondeur %d, λ=%.2f)...\n\n"
-        nb_rounds depth lambda;
-    IMP_MINIMAX.smooth_fictitious_play nb_rounds depth lambda init_p1 init_p2
+    let init_p2 = if ml_p1 <> ml_p2 then load_strategy ml_p2 else init_p1 in
+    Printf.printf "\nLancement du Smooth Fictitious Play (%d tours, profondeur %d)...\n\n"
+        nb_rounds depth;
+    IMP_MINIMAX.smooth_fictitious_play nb_rounds depth sched init_p1 init_p2
 
 
 (* --------------------------------------------------------------------------
@@ -138,14 +163,14 @@ let mode_sfp_time () =
     Printf.printf "\n=== Smooth Fictitious Play (temps limité) ===\n\n";
     let time = ask_float "Temps imparti (en secondes) : " in
     let depth = ask_int "Profondeur : " in
-    let lambda = ask_float "Lambda (paramètre softmax) : " in
+    let sched = ask_schedule () in
     let ml_p1 = ask_file "Chemin du fichier stratégie initiale P1 (.ml) : " in
     let ml_p2 = ask_file "Chemin du fichier stratégie initiale P2 (.ml) : " in
     let init_p1 = load_strategy ml_p1 in
-    let init_p2 = load_strategy ml_p2 in
-    Printf.printf "\nLancement du Smooth Fictitious Play (%.1fs, profondeur %d, λ=%.2f)...\n\n"
-        time depth lambda;
-    IMP_MINIMAX.smooth_fictitious_play_with_time time depth lambda init_p1 init_p2
+    let init_p2 = if ml_p1 <> ml_p2 then load_strategy ml_p2 else init_p1 in
+    Printf.printf "\nLancement du Smooth Fictitious Play (%.1fs, profondeur %d)...\n\n"
+        time depth;
+    IMP_MINIMAX.smooth_fictitious_play_with_time time depth sched init_p1 init_p2
 
 
 (* --------------------------------------------------------------------------
@@ -155,24 +180,24 @@ let mode_sfp_rounds_uniform () =
     Printf.printf "\n=== Smooth Fictitious Play (tours, strats initiales uniformes) ===\n\n";
     let nb_rounds = ask_int "Nombre de tours : " in
     let depth = ask_int "Profondeur : " in
-    let lambda = ask_float "Lambda (paramètre softmax) : " in
+    let sched = ask_schedule () in
     let init_p1 = Strategy.create_uniform_strategy () in
     let init_p2 = Strategy.create_uniform_strategy () in
-    Printf.printf "\nLancement du Smooth Fictitious Play (%d tours, profondeur %d, λ=%.2f)...\n\n"
-        nb_rounds depth lambda;
-    IMP_MINIMAX.smooth_fictitious_play nb_rounds depth lambda init_p1 init_p2
+    Printf.printf "\nLancement du Smooth Fictitious Play (%d tours, profondeur %d)...\n\n"
+        nb_rounds depth;
+    IMP_MINIMAX.smooth_fictitious_play nb_rounds depth sched init_p1 init_p2
 
 
 let mode_sfp_time_uniform () =
     Printf.printf "\n=== Smooth Fictitious Play (temps, strats initiales uniformes) ===\n\n";
     let time = ask_float "Temps imparti (en secondes) : " in
     let depth = ask_int "Profondeur : " in
-    let lambda = ask_float "Lambda (paramètre softmax) : " in
+    let sched = ask_schedule () in
     let init_p1 = Strategy.create_uniform_strategy () in
     let init_p2 = Strategy.create_uniform_strategy () in
-    Printf.printf "\nLancement du Smooth Fictitious Play (%.1fs, profondeur %d, λ=%.2f)...\n\n"
-        time depth lambda;
-    IMP_MINIMAX.smooth_fictitious_play_with_time time depth lambda init_p1 init_p2
+    Printf.printf "\nLancement du Smooth Fictitious Play (%.1fs, profondeur %d)...\n\n"
+        time depth;
+    IMP_MINIMAX.smooth_fictitious_play_with_time time depth sched init_p1 init_p2
 
 
 (* ==========================================================================

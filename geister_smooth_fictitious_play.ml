@@ -731,6 +731,23 @@ end
 
 
 
+(* ==========================================================================
+   Lambda Schedule : Permet de faire varier le paramètre lambda pour SFP
+   Afin de converger vers l'équilibre de Nash, lambda doit tendre vers l'infini.
+   ========================================================================== *)
+type lambda_schedule =
+  | Constant of float
+  | Linear of float * float (* l0, l_max *)
+  | Sqrt of float (* c -> lambda_t = c * sqrt(t) *)
+  | Exponential of float * float (* l0, alpha -> lambda_t = l0 * alpha^t *)
+
+let compute_lambda (sched : lambda_schedule) (round : int) (progress : float) : float =
+  match sched with
+  | Constant l -> l
+  | Linear (l0, lmax) -> l0 +. (lmax -. l0) *. progress
+  | Sqrt c -> c *. sqrt (float_of_int round)
+  | Exponential (l0, alpha) -> l0 *. (alpha ** float_of_int round)
+
 
 module UserInterface = struct 
 
@@ -1071,7 +1088,7 @@ module IMP_MINIMAX = struct
                 Hashtbl.replace avg_h key updated_probs
         ) new_h
 
-    let smooth_fictitious_play (nb_rounds : int) (depth : int) (lambda : float) 
+    let smooth_fictitious_play (nb_rounds : int) (depth : int) (sched : lambda_schedule) 
             (init_p1_str: strategy) (init_p2_str : strategy) : unit = 
         
         let start_time = Sys.time () in 
@@ -1090,7 +1107,13 @@ module IMP_MINIMAX = struct
 
         (* -- Logging -- *)
         let _ = Sys.command "mkdir -p reports" in
-        let fname = Printf.sprintf "sfp_t%dd%dl%.1f" nb_rounds depth lambda in
+        let sched_str = match sched with
+          | Constant l -> Printf.sprintf "l%.1f" l
+          | Linear (l0, lmax) -> Printf.sprintf "lin%.1f-%.1f" l0 lmax
+          | Sqrt c -> Printf.sprintf "sqrt%.1f" c
+          | Exponential (l0, alpha) -> Printf.sprintf "exp%.1f-%.3f" l0 alpha
+        in
+        let fname = Printf.sprintf "sfp_t%dd%d%s" nb_rounds depth sched_str in
         let txt_oc = open_out ("reports/" ^ fname ^ ".txt") in
         let csv_oc = open_out ("reports/" ^ fname ^ ".csv") in
         let log s = 
@@ -1102,7 +1125,8 @@ module IMP_MINIMAX = struct
         Printf.fprintf csv_oc "tour_p1,tour_p2,regret_p1,regret_p2,exploitabilite,temps_ecoule\n";
 
         let rec loop (round : int) : int = 
-            let new_score_pure1, h1 = imp_minimax !avg_p2_str P1 depth lambda in 
+            let lambda_t = compute_lambda sched round ((float_of_int round) /. (float_of_int nb_rounds)) in
+            let new_score_pure1, h1 = imp_minimax !avg_p2_str P1 depth lambda_t in 
             score_pure1 := new_score_pure1;
 
             score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
@@ -1134,7 +1158,8 @@ module IMP_MINIMAX = struct
             avg_p1_str := Strategy.create_strategy avg_h_p1 init_p1_str;
 
 
-            let new_score_pure2, h2 = imp_minimax !avg_p1_str P2 depth lambda in 
+            let lambda_t = compute_lambda sched round ((float_of_int round) /. (float_of_int nb_rounds)) in
+            let new_score_pure2, h2 = imp_minimax !avg_p1_str P2 depth lambda_t in 
             score_pure2 := new_score_pure2;
             
             score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
@@ -1159,11 +1184,11 @@ module IMP_MINIMAX = struct
             end
         in
         let round = loop 1 in 
-        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%dl%.2f" round depth lambda);
-        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%dl%.2f" (round-1) depth lambda)
+        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%d%s" round depth sched_str);
+        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%d%s" round depth sched_str)
 
 
-    let smooth_fictitious_play_with_time (time : float) (depth : int) (lambda : float) 
+    let smooth_fictitious_play_with_time (time : float) (depth : int) (sched : lambda_schedule) 
             (init_p1_str : strategy) (init_p2_str : strategy) : unit = 
 
         let start_time = Sys.time () in
@@ -1184,7 +1209,13 @@ module IMP_MINIMAX = struct
 
         (* -- Logging -- *)
         let _ = Sys.command "mkdir -p reports" in
-        let fname = Printf.sprintf "sfp_time%.1fd%dl%.1f" time depth lambda in
+        let sched_str = match sched with
+          | Constant l -> Printf.sprintf "l%.1f" l
+          | Linear (l0, lmax) -> Printf.sprintf "lin%.1f-%.1f" l0 lmax
+          | Sqrt c -> Printf.sprintf "sqrt%.1f" c
+          | Exponential (l0, alpha) -> Printf.sprintf "exp%.1f-%.3f" l0 alpha
+        in
+        let fname = Printf.sprintf "sfp_time%.1fd%d%s" time depth sched_str in
         let txt_oc = open_out ("reports/" ^ fname ^ ".txt") in
         let csv_oc = open_out ("reports/" ^ fname ^ ".csv") in
         let log s = 
@@ -1196,7 +1227,9 @@ module IMP_MINIMAX = struct
         Printf.fprintf csv_oc "tour_p1,tour_p2,regret_p1,regret_p2,exploitabilite,temps_ecoule\n";
 
         let rec loop (round : int) : int = 
-            let new_score_pure1, h1 = imp_minimax !avg_p2_str P1 depth lambda in 
+            let progress = min 1.0 ((Sys.time () -. start_time) /. time) in
+            let lambda_t = compute_lambda sched round progress in
+            let new_score_pure1, h1 = imp_minimax !avg_p2_str P1 depth lambda_t in 
             score_pure1 := new_score_pure1;
 
             score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
@@ -1228,7 +1261,9 @@ module IMP_MINIMAX = struct
             avg_p1_str := Strategy.create_strategy avg_h_p1 init_p1_str;
 
 
-            let new_score_pure2, h2 = imp_minimax !avg_p1_str P2 depth lambda in 
+            let progress = min 1.0 ((Sys.time () -. start_time) /. time) in
+            let lambda_t = compute_lambda sched round progress in
+            let new_score_pure2, h2 = imp_minimax !avg_p1_str P2 depth lambda_t in 
             score_pure2 := new_score_pure2;
             
             score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
@@ -1255,6 +1290,6 @@ module IMP_MINIMAX = struct
         let round = loop 1 in
         close_out txt_oc;
         close_out csv_oc;
-        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%dl%.2f" round depth lambda);
-        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%dl%.2f" (round-1) depth lambda)
+        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%d%s" round depth sched_str);
+        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%d%s" round depth sched_str)
 end
