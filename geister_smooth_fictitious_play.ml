@@ -697,6 +697,8 @@ module StrategyIO = struct
         Printf.fprintf oc "  match Hashtbl.find_opt _h (g, Encoding.encode i) with\n";
         Printf.fprintf oc "  | Some probs -> probs\n";
         Printf.fprintf oc "  | None       -> _uniform g i\n";
+        Printf.fprintf oc "\n(** Enregistrement pour le chargement dynamique **)\n";
+        Printf.fprintf oc "let () = Geister_smooth_fictitious_play.StrategyRegistry.register alt_probs\n";
         close_out oc;
         Printf.printf "[StrategyIO] Wrapper OCaml généré dans '%s'.\n" ml_file
 
@@ -715,6 +717,16 @@ module StrategyIO = struct
         Printf.printf "[StrategyIO] Table chargée depuis '%s'.\n" dat_file;
         tbl
 
+end
+
+(* module StrategyRegistry : Permet le chargement dynamique de stratégies. *)
+module StrategyRegistry = struct
+    let _registered = ref (None : strategy option)
+    let register (s : strategy) = _registered := Some s
+    let get_and_clear () = 
+        match !_registered with
+        | Some s -> _registered := None; s
+        | None -> failwith "Erreur : aucune stratégie n'a été enregistrée par le module chargé."
 end
 
 
@@ -975,9 +987,8 @@ module IMP_MINIMAX = struct
         | Leaf (leaf,w, g) ->
             failwith "Cas impossible dans la fonction value."
 
-    let imp_minimax (avg_opp_str : strategy) (p : player) 
-            (my_last_str : strategy) (max_depth : int) (lambda : float): 
-            float * strategy * (game * int, (alternative * float) list) Hashtbl.t =
+    let imp_minimax (avg_opp_str : strategy) (p : player) (max_depth : int) (lambda : float): 
+            float * (game * int, (alternative * float) list) Hashtbl.t =
         let h = Hashtbl.create (1 lsl 15) in 
         let score = 
             match p with 
@@ -995,7 +1006,7 @@ module IMP_MINIMAX = struct
                 ) in
                 value P2 avg_opp_str x 1 h max_depth lambda
         in 
-        score, Strategy.create_strategy h my_last_str, h
+        score, h
 
 
     let rec tpg_value (p : player) (x_set : set) (depth : int) (h : (game * int, (alternative * float) list) Hashtbl.t) (max_depth : int) (lambda : float) : float = 
@@ -1060,18 +1071,16 @@ module IMP_MINIMAX = struct
                 Hashtbl.replace avg_h key updated_probs
         ) new_h
 
-    let smooth_fictitious_play (nb_rounds : int) (depth : int) 
-                                (lambda : float) : unit = 
+    let smooth_fictitious_play (nb_rounds : int) (depth : int) (lambda : float) 
+            (init_p1_str: strategy) (init_p2_str : strategy) : unit = 
         
         let start_time = Sys.time () in 
         Printf.printf "Création des stratégies aléatoires initiales.\n";
         let avg_h_p1 = Hashtbl.create (1 lsl 20) in 
         let avg_h_p2 = Hashtbl.create (1 lsl 20) in
-        let last_p1_str = ref (Strategy.create_uniform_strategy ()) in 
-        let last_p2_str = ref (Strategy.create_uniform_strategy ()) in
 
-        let avg_p1_str = ref !last_p1_str in
-        let avg_p2_str = ref !last_p2_str in
+        let avg_p1_str = ref init_p1_str in
+        let avg_p2_str = ref init_p2_str in
 
         let score_pure1 = ref 0. in 
         let score_pure2 = ref 0. in 
@@ -1093,9 +1102,8 @@ module IMP_MINIMAX = struct
         Printf.fprintf csv_oc "tour_p1,tour_p2,regret_p1,regret_p2,exploitabilite,temps_ecoule\n";
 
         let rec loop (round : int) : int = 
-            let new_score_pure1, new_p1_str, h1 = imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
+            let new_score_pure1, h1 = imp_minimax !avg_p2_str P1 depth lambda in 
             score_pure1 := new_score_pure1;
-            last_p1_str := new_p1_str;
 
             score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
             score_mixt2 := -.(!score_mixt1);
@@ -1123,12 +1131,11 @@ module IMP_MINIMAX = struct
             else begin
 
             update_average_strategy avg_h_p1 h1 round;
-            avg_p1_str := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
+            avg_p1_str := Strategy.create_strategy avg_h_p1 init_p1_str;
 
 
-            let new_score_pure2, new_p2_str, h2 = imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
+            let new_score_pure2, h2 = imp_minimax !avg_p1_str P2 depth lambda in 
             score_pure2 := new_score_pure2;
-            last_p2_str := new_p2_str;
             
             score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
             score_mixt2 := -.(!score_mixt1);
@@ -1147,7 +1154,7 @@ module IMP_MINIMAX = struct
             flush csv_oc;
 
             update_average_strategy avg_h_p2 h2 round;
-            avg_p2_str := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
+            avg_p2_str := Strategy.create_strategy avg_h_p2 init_p2_str;
             loop (round + 1) 
             end
         in
@@ -1156,19 +1163,17 @@ module IMP_MINIMAX = struct
         StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%dl%.2f" (round-1) depth lambda)
 
 
-    let smooth_fictitious_play_with_time (time : float) (depth : int) 
-        (lambda : float) : unit = 
+    let smooth_fictitious_play_with_time (time : float) (depth : int) (lambda : float) 
+            (init_p1_str : strategy) (init_p2_str : strategy) : unit = 
 
         let start_time = Sys.time () in
         let stop_time = start_time +. time in
         Printf.printf "Création des stratégies aléatoires initiales.\n";
         let avg_h_p1 = Hashtbl.create (1 lsl 20) in 
         let avg_h_p2 = Hashtbl.create (1 lsl 20) in
-        let last_p1_str = ref (Strategy.create_uniform_strategy ()) in 
-        let last_p2_str = ref (Strategy.create_uniform_strategy ()) in
 
-        let avg_p1_str = ref !last_p1_str in
-        let avg_p2_str = ref !last_p2_str in
+        let avg_p1_str = ref init_p1_str in
+        let avg_p2_str = ref init_p2_str in
 
         let score_pure1 = ref 0. in 
         let score_pure2 = ref 0. in 
@@ -1191,9 +1196,8 @@ module IMP_MINIMAX = struct
         Printf.fprintf csv_oc "tour_p1,tour_p2,regret_p1,regret_p2,exploitabilite,temps_ecoule\n";
 
         let rec loop (round : int) : int = 
-            let new_score_pure1, new_p1_str, h1 = imp_minimax !avg_p2_str P1 !last_p1_str depth lambda in 
+            let new_score_pure1, h1 = imp_minimax !avg_p2_str P1 depth lambda in 
             score_pure1 := new_score_pure1;
-            last_p1_str := new_p1_str;
 
             score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
             score_mixt2 := -.(!score_mixt1);
@@ -1221,12 +1225,11 @@ module IMP_MINIMAX = struct
             else begin
 
             update_average_strategy avg_h_p1 h1 round;
-            avg_p1_str := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
+            avg_p1_str := Strategy.create_strategy avg_h_p1 init_p1_str;
 
 
-            let new_score_pure2, new_p2_str, h2 = imp_minimax !avg_p1_str P2 !last_p2_str depth lambda in 
+            let new_score_pure2, h2 = imp_minimax !avg_p1_str P2 depth lambda in 
             score_pure2 := new_score_pure2;
-            last_p2_str := new_p2_str;
             
             score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
             score_mixt2 := -.(!score_mixt1);
@@ -1245,7 +1248,7 @@ module IMP_MINIMAX = struct
             flush csv_oc;
 
             update_average_strategy avg_h_p2 h2 round;
-            avg_p2_str := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
+            avg_p2_str := Strategy.create_strategy avg_h_p2 init_p2_str;
             loop (round + 1) 
             end
         in

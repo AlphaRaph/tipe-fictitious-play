@@ -760,8 +760,9 @@ let test6_imp_minimax () =
   let fails_6a = ref 0 in
   for k = 1 to 10 do
     let rand_mix = Strategy.create_random_strategy () in
-    let score_pred, my_str, _ =
-      IMP_MINIMAX.imp_minimax rand_mix P1 uniform depth lambda in
+    let score_pred, h =
+      IMP_MINIMAX.imp_minimax rand_mix P1 depth lambda in
+    let my_str = Strategy.create_strategy h uniform in 
     let my_pure = Strategy.convert_to_pure_strategy my_str in
     let score_emp = simulate_n_games nb_simul my_pure rand_mix depth in
     if k = 1 then
@@ -782,7 +783,8 @@ let test6_imp_minimax () =
     (!fails_6a = 0);
   check "my_str est normalisée sur mid_game après la dernière itération"
     (let rand = Strategy.create_random_strategy () in
-     let _, last_str, _ = IMP_MINIMAX.imp_minimax rand P1 uniform depth lambda in
+     let _, h = IMP_MINIMAX.imp_minimax rand P1 depth lambda in
+     let last_str = Strategy.create_strategy h uniform in 
      strategy_is_valid last_str mid_game g_mid);
 
   (* ---- 6b. Contre 10 stratégies pures aléatoires ---- *)
@@ -790,8 +792,9 @@ let test6_imp_minimax () =
   let fails_6b = ref 0 in
   for k = 1 to 10 do
     let rand_pure = Strategy.create_random_pure_strategy () in
-    let score_pred, my_str, _ =
-      IMP_MINIMAX.imp_minimax rand_pure P1 uniform depth lambda in
+    let score_pred, h =
+      IMP_MINIMAX.imp_minimax rand_pure P1 depth lambda in
+    let my_str = Strategy.create_strategy h uniform in 
     let my_pure = Strategy.convert_to_pure_strategy my_str in
     let score_emp = simulate_n_games nb_simul my_pure rand_pure depth in
     (* Contre une strat pure, imp_minimax est exact (pas de biais softmax/pure
@@ -812,8 +815,9 @@ let test6_imp_minimax () =
   let fails_6c = ref 0 in
   for k = 1 to 10 do
     let rand_mix2 = Strategy.create_random_strategy () in
-    let score_pred2, my_str2, _ =
-      IMP_MINIMAX.imp_minimax rand_mix2 P2 uniform depth lambda in
+    let score_pred2, h =
+      IMP_MINIMAX.imp_minimax rand_mix2 P2 depth lambda in
+    let my_str2 = Strategy.create_strategy h uniform in
     let my_pure2 = Strategy.convert_to_pure_strategy my_str2 in
     let emp_p1_score = simulate_n_games nb_simul rand_mix2 my_pure2 depth in
     (* simulate_play renvoie TOUJOURS le score de P1. Donc le score empirique de P2 est l'opposé. *)
@@ -834,8 +838,9 @@ let test6_imp_minimax () =
   let fails_6cbis = ref 0 in
   for k = 1 to 10 do
     let rand_pure2 = Strategy.create_random_pure_strategy () in
-    let score_pred2, my_str2, _ =
-      IMP_MINIMAX.imp_minimax rand_pure2 P2 uniform depth lambda in
+    let score_pred2, h =
+      IMP_MINIMAX.imp_minimax rand_pure2 P2 depth lambda in
+    let my_str2 = Strategy.create_strategy h uniform in
     let my_pure2 = Strategy.convert_to_pure_strategy my_str2 in
     let emp_p1_score = simulate_n_games nb_simul rand_pure2 my_pure2 depth in
     let score_emp2 = -. emp_p1_score in
@@ -854,8 +859,8 @@ let test6_imp_minimax () =
   (* ---- 6d. Cohérence : IMP_MINIMAX est déterministe à stratégie fixée ---- *)
   Printf.printf "\n-- 6d. Cohérence : même opp_str → même score --\n";
   let fixed_opp = Strategy.create_uniform_strategy () in
-  let s_a, _, _ = IMP_MINIMAX.imp_minimax fixed_opp P1 uniform depth lambda in
-  let s_b, _, _ = IMP_MINIMAX.imp_minimax fixed_opp P1 uniform depth lambda in
+  let s_a, _ = IMP_MINIMAX.imp_minimax fixed_opp P1 depth lambda in
+  let s_b, _ = IMP_MINIMAX.imp_minimax fixed_opp P1 depth lambda in
   Printf.printf "  score run 1 = %+.6f, run 2 = %+.6f\n" s_a s_b;
   check_float "imp_minimax est déterministe (même args → même score)" s_a s_b 1e-9;
 
@@ -869,15 +874,15 @@ let test6_imp_minimax () =
   let avg_p2  = ref !last_p2 in
 
   for round = 1 to 4 do
-    let sc1, new_p1, h1 =
-      IMP_MINIMAX.imp_minimax !avg_p2 P1 !last_p1 depth lambda in
-    last_p1 := new_p1;
+    let sc1, h1 =
+      IMP_MINIMAX.imp_minimax !avg_p2 P1 depth lambda in
+    last_p1 := Strategy.create_strategy h1 !last_p1;
     IMP_MINIMAX.update_average_strategy avg_h_p1 h1 round;
     avg_p1 := Strategy.create_strategy avg_h_p1 (Strategy.create_uniform_strategy ());
 
-    let sc2, new_p2, h2 =
-      IMP_MINIMAX.imp_minimax !avg_p1 P2 !last_p2 depth lambda in
-    last_p2 := new_p2;
+    let sc2, h2 =
+      IMP_MINIMAX.imp_minimax !avg_p1 P2 depth lambda in
+    last_p2 := Strategy.create_strategy h2 !last_p2;
     IMP_MINIMAX.update_average_strategy avg_h_p2 h2 round;
     avg_p2 := Strategy.create_strategy avg_h_p2 (Strategy.create_uniform_strategy ());
 
