@@ -107,7 +107,7 @@ let mode_strategy_vs_strategy () =
     let nb_games = ask_int "Nombre de parties : " in
     let depth = ask_int "Profondeur maximale (nombre de coups total) : " in
     let strat_p1 = load_strategy ml_p1 in
-    let strat_p2 = load_strategy ml_p2 in
+    let strat_p2 = if ml_p1 <> ml_p2 then load_strategy ml_p2 else strat_p1 in
     Printf.printf "\nSimulation de %d parties (profondeur %d)...\n" nb_games depth;
     let score = UserInterface.test_strategies strat_p1 strat_p2 nb_games depth in
     Printf.printf "\nScore moyen de P1 : %+.4f\n" score;
