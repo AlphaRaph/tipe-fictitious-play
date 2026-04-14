@@ -89,7 +89,7 @@ let print_state_for_unknown (p, b, d : state) : unit =
       let k = i*board_width+j in
       match b.[k] with 
       | 'B' -> blue_cnt := 1 + !blue_cnt; 
-               if List.mem k unknown_exit_cases then exited := true; 
+               if List.mem k known_exit_cases then exited := true; 
                Printf.printf " ? "
       | 'R' -> red_cnt  := 1 + !red_cnt ; 
                Printf.printf " ? "
@@ -101,9 +101,10 @@ let print_state_for_unknown (p, b, d : state) : unit =
   Printf.printf "   "; for j = 0 to (board_width-1) do Printf.printf " %c " (char_of_int (97+j)) done; Printf.printf "\n";
   
   Printf.printf "Tour : %s\n" (string p);
-  if !exited then Printf.printf "Un fantôme bleu inconnu est sorti coucou !\n";
-  Printf.printf "Nombre de fantômes bleus inconnus morts : %d\n"  (number_of_blue_ghosts - !blue_cnt);
-  Printf.printf "Nombre de fantômes rouges inconnus morts : %d\n" (number_of_red_ghosts  - !red_cnt )
+  if !exited then Printf.printf "Un fantôme bleu adverse est sorti !\n";
+  Printf.printf "Nombre de fantômes bleus adverses morts : %d\n"  (number_of_blue_ghosts - !blue_cnt);
+  Printf.printf "Nombre de fantômes rouges adverses morts : %d\n" (number_of_red_ghosts  - !red_cnt );
+  if d = -1 then Printf.printf "L'un de vos fantômes bleus est sorti !\n"
 
 let print_list (print_elt : 'a -> unit) (l : 'a list) : unit = 
   let rec aux = function 
@@ -379,10 +380,6 @@ let possible_list_placements ((p, b, d) as s : state) : list_placement list =
 let possible_placements (s : state) : placement list = 
   (* post-condition : Une liste contenant tous les dispositions possibles des fantômes inconnus pour l'état s.
     Ces dispositions ne prennent pas en compte les fantômes éliminés, ils sont donc attribués à U dans ces dispositions.*)
-  (* Printf.printf "Fantômes inconnus encore en jeu triés par ordre croissant : \n";
-  print_list print_int unknown_ghosts;
-  Printf.printf "Tous les placements possibles sous formes de liste : \n";
-  print_list (print_list (fun g -> print_char (char g))) (create_list_placements 0 unknown_ghosts); *)
   List.map (fun l_p -> list_placement_to_placement l_p) (possible_list_placements s)
 
 let all_possible_placements : placement list  = 
@@ -499,8 +496,6 @@ let rec average (possible_placements : placement list) (p_s : pending_state) (de
   | [] -> sum / count
   | pl :: l -> average l p_s depth (sum + alphabeta pl (play pl p_s) depth) (count+1) 
 let average (possible_placements : placement list) (p_s : pending_state) (depth : int): int = 
-  (*Printf.printf "Appel de la fonction average : \n - possible_placements : ";
-  print_list print_placement possible_placements; *)
   average possible_placements p_s depth 0 0
 
 let best_average (possible_placements : placement list) (moves : pending_state list) : pending_state * int = 
@@ -529,8 +524,6 @@ let rec worst (possible_placements : placement list) (p_s : pending_state) (dept
   | pl :: l -> worst l p_s depth (min worst_score (alphabeta pl (play pl p_s) depth)) 
 
 let worst (possible_placements : placement list) (p_s : pending_state) (depth : int): int = 
-  (*Printf.printf "Appel de la fonction average : \n - possible_placements : ";
-  print_list print_placement possible_placements; *)
   worst possible_placements p_s depth 0
 
 let least_worst (possible_placements : placement list) (moves : pending_state list) : pending_state * int = 
@@ -677,16 +670,7 @@ let rec alphabeta_vs_user_worst (user_placement : placement) (s: state) : state 
       alphabeta_vs_user_worst user_placement (play user_placement bmove)
 
 
-let () = Printf.printf "Je m'exécute.\n"
-
 let () = play_game_with_user (alphabeta_vs_user_worst user_placement) 
                              (let binitial_state, baverage = least_worst (all_possible_placements) all_initial_pending_states in
-                               Printf.printf "L'emplacement que je joue à une moyenne de %d.\n" baverage;
-                               play (random_placement ()) binitial_state)
-
-let () = Printf.printf "Exécution terminée.\n"
-
-
-
-
-
+                                Printf.printf "L'emplacement que je joue a un pire cas de %d.\n" baverage;
+                                play (random_placement ()) binitial_state)
