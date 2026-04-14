@@ -610,6 +610,20 @@ module Strategy = struct
 end 
 
 
+
+(* =============================================================
+   MODULE StrategyRegistry - Chargement dynamique de stratégies
+   ============================================================= *)
+module StrategyRegistry = struct
+    let _registered = ref (None : strategy option)
+    let register (s : strategy) = _registered := Some s
+    let get_and_clear () = 
+        match !_registered with
+        | Some s -> _registered := None; s
+        | None -> failwith "Erreur : aucune stratégie n'a été enregistrée par le module chargé."
+end
+
+
 (* ============================================================
    MODULE StrategyIO — Sauvegarde et chargement de stratégies
    ============================================================ *)
@@ -635,7 +649,8 @@ module StrategyIO = struct
     *)
     let save_hashtbl_strategy
             (h : ((game * int), (alternative * float) list) Hashtbl.t)
-            (strat_name : string) : unit =
+            (strat_name : string)
+            (fallback_ml_file : string) : unit =
         let dir = "strategies" in
         if not (Sys.file_exists dir) then ignore (Sys.command (Printf.sprintf "mkdir -p %s" dir));
         let ocaml_version = Sys.ocaml_version in
@@ -682,21 +697,31 @@ module StrategyIO = struct
         Printf.fprintf oc "    : ((game * int), (alternative * float) list) Hashtbl.t) in\n";
         Printf.fprintf oc "  close_in ic; tbl\n";
         Printf.fprintf oc "\n";
-        Printf.fprintf oc "(* Strategie de secours : distribution uniforme sur les alternatives. *)\n";
-        Printf.fprintf oc "let _uniform (g : game) (i : info_set) : (alternative * float) list =\n";
-        Printf.fprintf oc "  ignore g;\n";
-        Printf.fprintf oc "  let alts = GameTree.alternatives [(i, 1.)] in\n";
-        Printf.fprintf oc "  let n = List.length alts in\n";
-        Printf.fprintf oc "  List.map (fun alt -> (alt, 1. /. float n)) alts\n";
+        Printf.fprintf oc "(* Code injecté de la stratégie de secours : %s *)\n\n" fallback_ml_file;
+        let ic_fallback = open_in fallback_ml_file in
+        let fallback_func_name = ref "" in
+        try
+            while true do
+                let line = input_line ic_fallback in
+                let trim_line = String.trim line in
+                let prefix1 = "let () = StrategyRegistry.register" in
+                let prefix2 = "let () = Geister_smooth_fictitious_play.StrategyRegistry.register" in
+                if String.length trim_line >= String.length prefix1 && String.sub trim_line 0 (String.length prefix1) = prefix1 then
+                  fallback_func_name := String.trim (String.sub trim_line (String.length prefix1) (String.length trim_line - String.length prefix1))
+                else if String.length trim_line >= String.length prefix2 && String.sub trim_line 0 (String.length prefix2) = prefix2 then
+                  fallback_func_name := String.trim (String.sub trim_line (String.length prefix2) (String.length trim_line - String.length prefix2))
+                else
+                  Printf.fprintf oc "%s\n" line
+            done
+        with End_of_file -> close_in ic_fallback;
+
         Printf.fprintf oc "\n";
-        Printf.fprintf oc "(** [alt_probs g i] renvoie la distribution de probabilites sur les\n";
-        Printf.fprintf oc "    alternatives disponibles dans l'etat d'information [i] apres la\n";
-        Printf.fprintf oc "    partie [g]. Utilise la table precalculee ; retombe sur la\n";
-        Printf.fprintf oc "    distribution uniforme si l'etat n'a pas ete explore. *)\n";
+        Printf.fprintf oc "(** [alt_probs g i] utilise la table precalculee ; retombe sur la\n";
+        Printf.fprintf oc "    statégie de secours %s si l'etat n'a pas ete explore. *)\n" !fallback_func_name;
         Printf.fprintf oc "let alt_probs (g : game) (i : info_set) : (alternative * float) list =\n";
         Printf.fprintf oc "  match Hashtbl.find_opt _h (g, Encoding.encode i) with\n";
         Printf.fprintf oc "  | Some probs -> probs\n";
-        Printf.fprintf oc "  | None       -> _uniform g i\n";
+        Printf.fprintf oc "  | None       -> %s g i\n" !fallback_func_name;
         Printf.fprintf oc "\n(** Enregistrement pour le chargement dynamique **)\n";
         Printf.fprintf oc "let () = Geister_smooth_fictitious_play.StrategyRegistry.register alt_probs\n";
         close_out oc;
@@ -717,16 +742,24 @@ module StrategyIO = struct
         Printf.printf "[StrategyIO] Table chargée depuis '%s'.\n" dat_file;
         tbl
 
-end
+    (* [load_strategy_from_file ml_file]
+       Compile dynamiquement un fichier de stratégie .ml en module natif partagé (.cmxs),
+       puis le charge en mémoire et récupère la stratégie via [StrategyRegistry].
+       Utile pour injecter une heuristique ou un adversaire défini en externe.
+       Levée d'exception (failwith) en cas d'échec de compilation ou de Dynlink. *)
+    let load_strategy_from_file (ml_file : string) : strategy =
+        let cmxs_file = Filename.chop_extension ml_file ^ ".cmxs" in
+        let cmd = Printf.sprintf "ocamlopt -shared -I . -open Geister_smooth_fictitious_play %s -o %s" ml_file cmxs_file in
+        let ret = Sys.command cmd in
+        if ret <> 0 then failwith (Printf.sprintf "Erreur de compilation pour %s" ml_file);
+        try
+            Dynlink.loadfile cmxs_file;
+            StrategyRegistry.get_and_clear ()
+        with
+        | Dynlink.Error e -> failwith (Printf.sprintf "Erreur Dynlink : %s" (Dynlink.error_message e))
 
-(* module StrategyRegistry : Permet le chargement dynamique de stratégies. *)
-module StrategyRegistry = struct
-    let _registered = ref (None : strategy option)
-    let register (s : strategy) = _registered := Some s
-    let get_and_clear () = 
-        match !_registered with
-        | Some s -> _registered := None; s
-        | None -> failwith "Erreur : aucune stratégie n'a été enregistrée par le module chargé."
+
+
 end
 
 
@@ -740,6 +773,10 @@ type lambda_schedule =
   | Linear of float * float (* l0, l_max *)
   | Sqrt of float (* c -> lambda_t = c * sqrt(t) *)
   | Exponential of float * float (* l0, alpha -> lambda_t = l0 * alpha^t *)
+
+type sfp_mode =
+  | ByRounds of int   (* Arrêt après un nombre de tours exact *)
+  | ByTime of float   (* Arrêt après un certain temps en secondes *)
 
 let compute_lambda (sched : lambda_schedule) (round : int) (progress : float) : float =
   match sched with
@@ -978,7 +1015,8 @@ module IMP_MINIMAX = struct
             let children = GameTree.opg_children avg_opp_str x_pi_set g in 
             let alt_scores = List.map (fun (y_set, alt) -> alt, value p avg_opp_str 
                 y_set (depth+2) h max_depth lambda) children in
-            Hashtbl.add h (g, code) (softmax alt_scores lambda);
+            if List.exists (fun (alt, score) -> (abs_float score) > 0.00001) alt_scores then
+                Hashtbl.add h (g, code) (softmax alt_scores lambda);
             List.fold_left 
                 (fun best_score (alt, score) -> max best_score score) 
                 neg_infinity alt_scores
@@ -1088,16 +1126,26 @@ module IMP_MINIMAX = struct
                 Hashtbl.replace avg_h key updated_probs
         ) new_h
 
-    let smooth_fictitious_play (nb_rounds : int) (depth : int) (sched : lambda_schedule) 
-            (init_p1_str: strategy) (init_p2_str : strategy) : unit = 
+    let smooth_fictitious_play ?(resume : (string * string * int) option = None) (mode : sfp_mode) (depth : int) (sched : lambda_schedule) 
+            (init_p1_ml: string) (init_p2_ml : string) : unit = 
         
+        let init_p1_str = StrategyIO.load_strategy_from_file init_p1_ml in
+        let init_p2_str = if init_p1_ml = init_p2_ml then init_p1_str else StrategyIO.load_strategy_from_file init_p2_ml in
+
         let start_time = Sys.time () in 
-        Printf.printf "Création des stratégies aléatoires initiales.\n";
-        let avg_h_p1 = Hashtbl.create (1 lsl 20) in 
-        let avg_h_p2 = Hashtbl.create (1 lsl 20) in
+        
+        let avg_h_p1, avg_h_p2, start_round = 
+            match resume with
+            | None -> 
+                Printf.printf "Création des tables par défaut (départ à zéro).\n";
+                Hashtbl.create (1 lsl 20), Hashtbl.create (1 lsl 20), 1
+            | Some (dat1, dat2, r0) ->
+                Printf.printf "Chargement des tables de la partie précédente (tour %d).\n" r0;
+                StrategyIO.load_hashtbl_strategy dat1, StrategyIO.load_hashtbl_strategy dat2, r0 + 1
+        in
 
-        let avg_p1_str = ref init_p1_str in
-        let avg_p2_str = ref init_p2_str in
+        let avg_p1_str = ref (if start_round = 1 then init_p1_str else Strategy.create_strategy avg_h_p1 init_p1_str) in
+        let avg_p2_str = ref (if start_round = 1 then init_p2_str else Strategy.create_strategy avg_h_p2 init_p2_str) in
 
         let score_pure1 = ref 0. in 
         let score_pure2 = ref 0. in 
@@ -1113,7 +1161,23 @@ module IMP_MINIMAX = struct
           | Sqrt c -> Printf.sprintf "sqrt%.1f" c
           | Exponential (l0, alpha) -> Printf.sprintf "exp%.1f-%.3f" l0 alpha
         in
-        let fname = Printf.sprintf "sfp_t%dd%d%s" nb_rounds depth sched_str in
+        let fname = match mode with
+          | ByRounds nb_rounds -> Printf.sprintf "sfp_t%dd%d%s" nb_rounds depth sched_str
+          | ByTime time -> Printf.sprintf "sfp_time%.1fd%d%s" time depth sched_str
+        in
+        
+        let get_progress round =
+            match mode with
+            | ByRounds nb_rounds -> min 1.0 ((float_of_int (round - start_round + 1)) /. (float_of_int nb_rounds))
+            | ByTime time -> min 1.0 ((Sys.time () -. start_time) /. time)
+        in
+
+        let is_finished round =
+            match mode with
+            | ByRounds nb_rounds -> round >= start_round + nb_rounds
+            | ByTime time -> (Sys.time () -. start_time) >= time
+        in
+
         let txt_oc = open_out ("reports/" ^ fname ^ ".txt") in
         let csv_oc = open_out ("reports/" ^ fname ^ ".csv") in
         let log s = 
@@ -1125,109 +1189,7 @@ module IMP_MINIMAX = struct
         Printf.fprintf csv_oc "tour_p1,tour_p2,regret_p1,regret_p2,exploitabilite,temps_ecoule\n";
 
         let rec loop (round : int) : int = 
-            let lambda_t = compute_lambda sched round ((float_of_int round) /. (float_of_int nb_rounds)) in
-            let new_score_pure1, h1 = imp_minimax !avg_p2_str P1 depth lambda_t in 
-            score_pure1 := new_score_pure1;
-
-            score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
-            score_mixt2 := -.(!score_mixt1);
-            let regret_p1 = !score_pure1 -. !score_mixt1 in
-            let regret_p2 = !score_pure2 -. !score_mixt2 in
-            let exploitability = regret_p1 +. regret_p2 in 
-            log (Printf.sprintf "Tour %d prof %d : p1_str_%d, meilleure réponse à p2_str_%d, calculée.\n" round depth round (round - 1));
-            log (Printf.sprintf "Pour le profil (p1_str_%d, p2_str_%d) : \n" (round - 1) (round - 1));
-            log (Printf.sprintf "Regret de P1 : %f\n" regret_p1);
-            if round > 1 then begin 
-                log (Printf.sprintf "Regret de P2 : %f\n" regret_p2);
-                log (Printf.sprintf "Exploitabilité : %f\n" exploitability);
-            end else begin 
-                log (Printf.sprintf "Regret de P2 : Non disponible au tour 1\n");
-                log (Printf.sprintf "Exploitabilité : Non disponible au tour 1\n");
-            end;
-            log (Printf.sprintf "Temps écoulé : %fs\n" (Sys.time () -. start_time));
-            log (Printf.sprintf "\n");
-            Printf.fprintf csv_oc "%d,%d,%f,%f,%f,%.3f\n"
-                round (round-1) regret_p1 regret_p2 exploitability (Sys.time () -. start_time);
-            flush csv_oc;
-
-            if (round = nb_rounds + 1) then
-                round - 1
-            else begin
-
-            update_average_strategy avg_h_p1 h1 round;
-            avg_p1_str := Strategy.create_strategy avg_h_p1 init_p1_str;
-
-
-            let lambda_t = compute_lambda sched round ((float_of_int round) /. (float_of_int nb_rounds)) in
-            let new_score_pure2, h2 = imp_minimax !avg_p1_str P2 depth lambda_t in 
-            score_pure2 := new_score_pure2;
-            
-            score_mixt1 := UserInterface.test_strategies !avg_p1_str !avg_p2_str 200 depth;
-            score_mixt2 := -.(!score_mixt1);
-            let regret_p1 = !score_pure1 -. !score_mixt1 in
-            let regret_p2 = !score_pure2 -. !score_mixt2 in
-            let exploitability = regret_p1 +. regret_p2 in 
-            log (Printf.sprintf "Tour %d prof %d : p2_str_%d, meilleure réponse à p1_str_%d, calculée.\n" round depth round round);
-            log (Printf.sprintf "Pour le profil (p1_str_%d, p2_str_%d) : \n" round (round - 1));
-            log (Printf.sprintf "Regret de P1 : %f\n" regret_p1);
-            log (Printf.sprintf "Regret de P2 : %f\n" regret_p2);
-            log (Printf.sprintf "Exploitabilité : %f\n" exploitability);
-            log (Printf.sprintf "Temps écoulé : %fs\n" (Sys.time () -. start_time));
-            log (Printf.sprintf "\n");
-            Printf.fprintf csv_oc "%d,%d,%f,%f,%f,%.3f\n"
-                round round regret_p1 regret_p2 exploitability (Sys.time () -. start_time);
-            flush csv_oc;
-
-            update_average_strategy avg_h_p2 h2 round;
-            avg_p2_str := Strategy.create_strategy avg_h_p2 init_p2_str;
-            loop (round + 1) 
-            end
-        in
-        let round = loop 1 in 
-        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%d%s" round depth sched_str);
-        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%d%s" round depth sched_str)
-
-
-    let smooth_fictitious_play_with_time (time : float) (depth : int) (sched : lambda_schedule) 
-            (init_p1_str : strategy) (init_p2_str : strategy) : unit = 
-
-        let start_time = Sys.time () in
-        let stop_time = start_time +. time in
-        Printf.printf "Création des stratégies aléatoires initiales.\n";
-        let avg_h_p1 = Hashtbl.create (1 lsl 20) in 
-        let avg_h_p2 = Hashtbl.create (1 lsl 20) in
-
-        let avg_p1_str = ref init_p1_str in
-        let avg_p2_str = ref init_p2_str in
-
-        let score_pure1 = ref 0. in 
-        let score_pure2 = ref 0. in 
-        let score_mixt1 = ref 0. in
-        let score_mixt2 = ref 0. in 
-
-        Printf.printf "Stratégies aléatoires intiales créées.\n";
-
-        (* -- Logging -- *)
-        let _ = Sys.command "mkdir -p reports" in
-        let sched_str = match sched with
-          | Constant l -> Printf.sprintf "l%.1f" l
-          | Linear (l0, lmax) -> Printf.sprintf "lin%.1f-%.1f" l0 lmax
-          | Sqrt c -> Printf.sprintf "sqrt%.1f" c
-          | Exponential (l0, alpha) -> Printf.sprintf "exp%.1f-%.3f" l0 alpha
-        in
-        let fname = Printf.sprintf "sfp_time%.1fd%d%s" time depth sched_str in
-        let txt_oc = open_out ("reports/" ^ fname ^ ".txt") in
-        let csv_oc = open_out ("reports/" ^ fname ^ ".csv") in
-        let log s = 
-            output_string txt_oc s; 
-            flush txt_oc;
-            print_string s;
-            flush stdout
-        in
-        Printf.fprintf csv_oc "tour_p1,tour_p2,regret_p1,regret_p2,exploitabilite,temps_ecoule\n";
-
-        let rec loop (round : int) : int = 
-            let progress = min 1.0 ((Sys.time () -. start_time) /. time) in
+            let progress = get_progress round in
             let lambda_t = compute_lambda sched round progress in
             let new_score_pure1, h1 = imp_minimax !avg_p2_str P1 depth lambda_t in 
             score_pure1 := new_score_pure1;
@@ -1239,29 +1201,32 @@ module IMP_MINIMAX = struct
             let exploitability = regret_p1 +. regret_p2 in 
             log (Printf.sprintf "Tour %d prof %d : p1_str_%d, meilleure réponse à p2_str_%d, calculée.\n" round depth round (round - 1));
             log (Printf.sprintf "Pour le profil (p1_str_%d, p2_str_%d) : \n" (round - 1) (round - 1));
-            log (Printf.sprintf "Regret de P1 : %f\n" regret_p1);
+            log (Printf.sprintf "Regret de P1 : %f - %f = %f\n" !score_pure1 !score_mixt1 regret_p1);
             if round > 1 then begin 
-                log (Printf.sprintf "Regret de P2 : %f\n" regret_p2);
+                log (Printf.sprintf "Regret de P2 : %f - %f = %f\n" !score_pure2 !score_mixt2 regret_p2);
                 log (Printf.sprintf "Exploitabilité : %f\n" exploitability);
             end else begin 
                 log (Printf.sprintf "Regret de P2 : Non disponible au tour 1\n");
                 log (Printf.sprintf "Exploitabilité : Non disponible au tour 1\n");
             end;
+            let score_init1 = UserInterface.test_strategies !avg_p1_str init_p2_str 200 depth in
+            let score_init2 = UserInterface.test_strategies !avg_p2_str init_p1_str 200 depth in
+            log (Printf.sprintf "Score de p1_str_%d contre init_p2_str : %f\n" (round - 1) score_init1);
+            log (Printf.sprintf "Score de p2_str_%d contre init_p1_str : %f\n" (round - 1) score_init2);
             log (Printf.sprintf "Temps écoulé : %fs\n" (Sys.time () -. start_time));
             log (Printf.sprintf "\n");
             Printf.fprintf csv_oc "%d,%d,%f,%f,%f,%.3f\n"
                 round (round-1) regret_p1 regret_p2 exploitability (Sys.time () -. start_time);
             flush csv_oc;
 
-            if (Sys.time () >= stop_time) then
+            if is_finished round then
                 round - 1
             else begin
 
             update_average_strategy avg_h_p1 h1 round;
             avg_p1_str := Strategy.create_strategy avg_h_p1 init_p1_str;
 
-
-            let progress = min 1.0 ((Sys.time () -. start_time) /. time) in
+            let progress = get_progress round in
             let lambda_t = compute_lambda sched round progress in
             let new_score_pure2, h2 = imp_minimax !avg_p1_str P2 depth lambda_t in 
             score_pure2 := new_score_pure2;
@@ -1273,9 +1238,13 @@ module IMP_MINIMAX = struct
             let exploitability = regret_p1 +. regret_p2 in 
             log (Printf.sprintf "Tour %d prof %d : p2_str_%d, meilleure réponse à p1_str_%d, calculée.\n" round depth round round);
             log (Printf.sprintf "Pour le profil (p1_str_%d, p2_str_%d) : \n" round (round - 1));
-            log (Printf.sprintf "Regret de P1 : %f\n" regret_p1);
-            log (Printf.sprintf "Regret de P2 : %f\n" regret_p2);
+            log (Printf.sprintf "Regret de P1 : %f - %f = %f\n" !score_pure1 !score_mixt1 regret_p1);
+            log (Printf.sprintf "Regret de P2 : %f - %f = %f\n" !score_pure2 !score_mixt2 regret_p2);
             log (Printf.sprintf "Exploitabilité : %f\n" exploitability);
+            let score_init1 = UserInterface.test_strategies !avg_p1_str init_p2_str 200 depth in
+            let score_init2 = UserInterface.test_strategies !avg_p2_str init_p1_str 200 depth in
+            log (Printf.sprintf "Score de p1_str_%d contre init_p2_str : %f\n" (round - 1) score_init1);
+            log (Printf.sprintf "Score de p2_str_%d contre init_p1_str : %f\n" (round - 1) score_init2);
             log (Printf.sprintf "Temps écoulé : %fs\n" (Sys.time () -. start_time));
             log (Printf.sprintf "\n");
             Printf.fprintf csv_oc "%d,%d,%f,%f,%f,%.3f\n"
@@ -1287,9 +1256,9 @@ module IMP_MINIMAX = struct
             loop (round + 1) 
             end
         in
-        let round = loop 1 in
+        let round = loop start_round in
         close_out txt_oc;
         close_out csv_oc;
-        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%d%s" round depth sched_str);
-        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%d%s" round depth sched_str)
+        StrategyIO.save_hashtbl_strategy avg_h_p1 (Printf.sprintf "p1t%dd%d%s" round depth sched_str) init_p1_ml;
+        StrategyIO.save_hashtbl_strategy avg_h_p2 (Printf.sprintf "p2t%dd%d%s" round depth sched_str) init_p2_ml
 end

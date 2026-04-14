@@ -10,30 +10,6 @@ open Geister_smooth_fictitious_play
 
 
 (* --------------------------------------------------------------------------
-   Utilitaire : charger une stratégie depuis un fichier .ml
-   -------------------------------------------------------------------------- *)
-let load_strategy (ml_file : string) : strategy =
-    let cmxs_file = Filename.chop_extension ml_file ^ ".cmxs" in
-    (* Compilation du fichier .ml en bibliothèque partagée .cmxs *)
-    (* On ne lie PAS geister_smooth_fictitious_play.cmx ici car il est déjà chargé par le programme principal. *)
-    (* Dynlink résoudra les références au chargement. *)
-    let cmd = Printf.sprintf "ocamlopt -shared -I . -open Geister_smooth_fictitious_play %s -o %s" ml_file cmxs_file in
-    if Sys.command cmd <> 0 then begin
-        Printf.printf "Erreur : échec de la compilation de '%s' en .cmxs.\n" ml_file;
-        exit 1
-    end;
-
-    (* Chargement dynamique du module compilé *)
-    (try Dynlink.loadfile cmxs_file with
-    | Dynlink.Error e ->
-        Printf.printf "Erreur : échec du chargement de '%s' : %s\n" cmxs_file (Dynlink.error_message e);
-        exit 1);
-
-    (* Récupération de la stratégie via le registre *)
-    StrategyRegistry.get_and_clear ()
-
-
-(* --------------------------------------------------------------------------
    Utilitaire : demander un joueur (P1 / P2) à l'utilisateur
    -------------------------------------------------------------------------- *)
 let ask_player () : player =
@@ -68,6 +44,33 @@ let ask_float (prompt : string) : float =
     with Failure _ ->
         Printf.printf "Entrée invalide.\n";
         exit 1
+
+
+(* --------------------------------------------------------------------------
+   Utilitaire : extraire le tour depuis le nom du fichier (ou demander)
+   -------------------------------------------------------------------------- *)
+let extract_round_or_ask (fname : string) : int =
+  let basename = Filename.basename fname in
+  let rec extract_t_num i =
+    if i >= String.length basename then None
+    else if basename.[i] = 't' then
+        let rec get_num j acc =
+            if j < String.length basename && basename.[j] >= '0' && basename.[j] <= '9' then
+                get_num (j + 1) (acc ^ String.make 1 basename.[j])
+            else if acc = "" then None else Some (int_of_string acc)
+        in
+        match get_num (i + 1) "" with
+        | Some n -> Some n
+        | None -> extract_t_num (i + 1)
+    else extract_t_num (i + 1)
+  in
+  match extract_t_num 0 with
+  | Some r -> 
+      Printf.printf "Tour de reprise détecté automatiquement : %d\n" r;
+      r
+  | None ->
+      Printf.printf "Impossible de détecter le tour à partir du nom du fichier.\n";
+      ask_int "A partir de quel tour souhaitez-vous reprendre ? (ex: si le fichier s'est arrêté au tour 150, reprenez de 150) : "
 
 
 (* --------------------------------------------------------------------------
@@ -116,7 +119,7 @@ let mode_play_against_strategy () =
     Printf.printf "\n=== Jouer contre une stratégie ===\n\n";
     let ml_file = ask_file "Chemin du fichier stratégie (.ml) : " in
     let user_player = ask_player () in
-    let strat = load_strategy ml_file in
+    let strat = StrategyIO.load_strategy_from_file ml_file in
     Printf.printf "\nDébut de la partie ! Vous jouez %s.\n\n"
         (match user_player with P1 -> "P1" | P2 -> "P2");
     UserInterface.user_against_strategy strat user_player
@@ -131,8 +134,8 @@ let mode_strategy_vs_strategy () =
     let ml_p2 = ask_file "Chemin du fichier stratégie P2 (.ml) : " in
     let nb_games = ask_int "Nombre de parties : " in
     let depth = ask_int "Profondeur maximale (nombre de coups total) : " in
-    let strat_p1 = load_strategy ml_p1 in
-    let strat_p2 = if ml_p1 <> ml_p2 then load_strategy ml_p2 else strat_p1 in
+    let strat_p1 = StrategyIO.load_strategy_from_file ml_p1 in
+    let strat_p2 = if ml_p1 <> ml_p2 then StrategyIO.load_strategy_from_file ml_p2 else strat_p1 in
     Printf.printf "\nSimulation de %d parties (profondeur %d)...\n" nb_games depth;
     let score = UserInterface.test_strategies strat_p1 strat_p2 nb_games depth in
     Printf.printf "\nScore moyen de P1 : %+.4f\n" score;
@@ -149,11 +152,9 @@ let mode_sfp_rounds () =
     let sched = ask_schedule () in
     let ml_p1 = ask_file "Chemin du fichier stratégie initiale P1 (.ml) : " in
     let ml_p2 = ask_file "Chemin du fichier stratégie initiale P2 (.ml) : " in
-    let init_p1 = load_strategy ml_p1 in
-    let init_p2 = if ml_p1 <> ml_p2 then load_strategy ml_p2 else init_p1 in
     Printf.printf "\nLancement du Smooth Fictitious Play (%d tours, profondeur %d)...\n\n"
         nb_rounds depth;
-    IMP_MINIMAX.smooth_fictitious_play nb_rounds depth sched init_p1 init_p2
+    IMP_MINIMAX.smooth_fictitious_play (ByRounds nb_rounds) depth sched ml_p1 ml_p2
 
 
 (* --------------------------------------------------------------------------
@@ -166,38 +167,67 @@ let mode_sfp_time () =
     let sched = ask_schedule () in
     let ml_p1 = ask_file "Chemin du fichier stratégie initiale P1 (.ml) : " in
     let ml_p2 = ask_file "Chemin du fichier stratégie initiale P2 (.ml) : " in
-    let init_p1 = load_strategy ml_p1 in
-    let init_p2 = if ml_p1 <> ml_p2 then load_strategy ml_p2 else init_p1 in
     Printf.printf "\nLancement du Smooth Fictitious Play (%.1fs, profondeur %d)...\n\n"
         time depth;
-    IMP_MINIMAX.smooth_fictitious_play_with_time time depth sched init_p1 init_p2
+    IMP_MINIMAX.smooth_fictitious_play (ByTime time) depth sched ml_p1 ml_p2
 
 
 (* --------------------------------------------------------------------------
-   Option 5 (bonus) : stratégie uniforme comme stratégie initiale
+   Option 5 / 6 : stratégie heuristique comme stratégie initiale
    -------------------------------------------------------------------------- *)
-let mode_sfp_rounds_uniform () =
-    Printf.printf "\n=== Smooth Fictitious Play (tours, strats initiales uniformes) ===\n\n";
+let mode_sfp_rounds_heuristic () =
+    Printf.printf "\n=== Smooth Fictitious Play (tours, strats initiales heuristiques) ===\n\n";
     let nb_rounds = ask_int "Nombre de tours : " in
     let depth = ask_int "Profondeur : " in
     let sched = ask_schedule () in
-    let init_p1 = Strategy.create_uniform_strategy () in
-    let init_p2 = Strategy.create_uniform_strategy () in
+    let heuristic_path = "strategies/heuristic.ml" in
     Printf.printf "\nLancement du Smooth Fictitious Play (%d tours, profondeur %d)...\n\n"
         nb_rounds depth;
-    IMP_MINIMAX.smooth_fictitious_play nb_rounds depth sched init_p1 init_p2
+    IMP_MINIMAX.smooth_fictitious_play (ByRounds nb_rounds) depth sched heuristic_path heuristic_path
 
 
-let mode_sfp_time_uniform () =
-    Printf.printf "\n=== Smooth Fictitious Play (temps, strats initiales uniformes) ===\n\n";
+let mode_sfp_time_heuristic () =
+    Printf.printf "\n=== Smooth Fictitious Play (temps, strats initiales heuristiques) ===\n\n";
     let time = ask_float "Temps imparti (en secondes) : " in
     let depth = ask_int "Profondeur : " in
     let sched = ask_schedule () in
-    let init_p1 = Strategy.create_uniform_strategy () in
-    let init_p2 = Strategy.create_uniform_strategy () in
+    let heuristic_path = "strategies/heuristic.ml" in
     Printf.printf "\nLancement du Smooth Fictitious Play (%.1fs, profondeur %d)...\n\n"
         time depth;
-    IMP_MINIMAX.smooth_fictitious_play_with_time time depth sched init_p1 init_p2
+    IMP_MINIMAX.smooth_fictitious_play (ByTime time) depth sched heuristic_path heuristic_path
+
+
+(* --------------------------------------------------------------------------
+   Option 7 / 8 : Reprendre une recherche SFP
+   -------------------------------------------------------------------------- *)
+let mode_sfp_rounds_resume () =
+    Printf.printf "\n=== Smooth Fictitious Play (reprendre, tours additionnels) ===\n\n";
+    let dat_p1 = ask_file "Chemin du fichier de sauvegarde P1 (.dat) : " in
+    let dat_p2 = ask_file "Chemin du fichier de sauvegarde P2 (.dat) : " in
+    let r0 = extract_round_or_ask dat_p1 in
+    let extra_rounds = ask_int "Nombre de tours SUPPLEMENTAIRES à effectuer : " in
+    let depth = ask_int "Profondeur : " in
+    let sched = ask_schedule () in
+    let ml_p1 = ask_file "Chemin du fichier de stratégie de secours P1 (.ml) (ex: strategies/heuristic.ml): " in
+    let ml_p2 = ask_file "Chemin du fichier de stratégie de secours P2 (.ml) : " in
+    Printf.printf "\nReprise du SFP au tour %d (pour %d nouveaux tours, profondeur %d)...\n\n"
+        (r0 + 1) extra_rounds depth;
+    IMP_MINIMAX.smooth_fictitious_play ~resume:(Some (dat_p1, dat_p2, r0)) (ByRounds extra_rounds) depth sched ml_p1 ml_p2
+
+let mode_sfp_time_resume () =
+    Printf.printf "\n=== Smooth Fictitious Play (reprendre, temps additionnel) ===\n\n";
+    let dat_p1 = ask_file "Chemin du fichier de sauvegarde P1 (.dat) : " in
+    let dat_p2 = ask_file "Chemin du fichier de sauvegarde P2 (.dat) : " in
+    let r0 = extract_round_or_ask dat_p1 in
+    let time = ask_float "Temps SUPPLEMENTAIRE imparti (en secondes) : " in
+    let depth = ask_int "Profondeur : " in
+    let sched = ask_schedule () in
+    let ml_p1 = ask_file "Chemin du fichier de stratégie de secours P1 (.ml) (ex: strategies/heuristic.ml): " in
+    let ml_p2 = ask_file "Chemin du fichier de stratégie de secours P2 (.ml) : " in
+    Printf.printf "\nReprise du SFP au tour %d (pour %.1fs supplémentaires, profondeur %d)...\n\n"
+        (r0 + 1) time depth;
+    IMP_MINIMAX.smooth_fictitious_play ~resume:(Some (dat_p1, dat_p2, r0)) (ByTime time) depth sched ml_p1 ml_p2
+
 
 
 (* ==========================================================================
@@ -205,26 +235,30 @@ let mode_sfp_time_uniform () =
    ========================================================================== *)
 let () =
     Printf.printf "\n";
-    Printf.printf "╔════════════════════════════════════════════════════════╗\n";
-    Printf.printf "║        Geister — Smooth Fictitious Play                ║\n";
-    Printf.printf "║        BELLIOT Raphaël — TIPE 2024-2025                ║\n";
-    Printf.printf "╠════════════════════════════════════════════════════════╣\n";
-    Printf.printf "║                                                        ║\n";
-    Printf.printf "║  1. Jouer contre une stratégie                         ║\n";
-    Printf.printf "║  2. Affronter deux stratégies entre elles              ║\n";
-    Printf.printf "║  3. SFP — tours limités (strats initiales fichier)     ║\n";
-    Printf.printf "║  4. SFP — temps limité  (strats initiales fichier)     ║\n";
-    Printf.printf "║  5. SFP — tours limités (strats initiales uniformes)   ║\n";
-    Printf.printf "║  6. SFP — temps limité  (strats initiales uniformes)   ║\n";
-    Printf.printf "║                                                        ║\n";
-    Printf.printf "╚════════════════════════════════════════════════════════╝\n";
+    Printf.printf "╔═════════════════════════════════════════════════════════╗\n";
+    Printf.printf "║         Geister — Smooth Fictitious Play                ║\n";
+    Printf.printf "║         BELLIOT Raphaël — TIPE 2024-2025                ║\n";
+    Printf.printf "╠═════════════════════════════════════════════════════════╣\n";
+    Printf.printf "║                                                         ║\n";
+    Printf.printf "║  1. Jouer contre une stratégie                          ║\n";
+    Printf.printf "║  2. Affronter deux stratégies entre elles               ║\n";
+    Printf.printf "║  3. SFP — tours limités (strats initiales fichier)      ║\n";
+    Printf.printf "║  4. SFP — temps limité  (strats initiales fichier)      ║\n";
+    Printf.printf "║  5. SFP — tours limités (strats initiales heuristiques) ║\n";
+    Printf.printf "║  6. SFP — temps limité  (strats initiales heuristiques) ║\n";
+    Printf.printf "║  7. SFP — REPRENDRE une recherche (tours additionnels)  ║\n";
+    Printf.printf "║  8. SFP — REPRENDRE une recherche (temps additionnel)   ║\n";
+    Printf.printf "║                                                         ║\n";
+    Printf.printf "╚═════════════════════════════════════════════════════════╝\n";
     Printf.printf "\n";
-    let choice = ask_int "Votre choix (1-6) : " in
+    let choice = ask_int "Votre choix (1-8) : " in
     match choice with
     | 1 -> mode_play_against_strategy ()
     | 2 -> mode_strategy_vs_strategy ()
     | 3 -> mode_sfp_rounds ()
     | 4 -> mode_sfp_time ()
-    | 5 -> mode_sfp_rounds_uniform ()
-    | 6 -> mode_sfp_time_uniform ()
+    | 5 -> mode_sfp_rounds_heuristic ()
+    | 6 -> mode_sfp_time_heuristic ()
+    | 7 -> mode_sfp_rounds_resume ()
+    | 8 -> mode_sfp_time_resume ()
     | _ -> Printf.printf "Choix invalide. Veuillez relancer le programme.\n"
