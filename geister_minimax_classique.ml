@@ -32,7 +32,7 @@ let (board_width, board_height,
   possible_moves) = configuration_4x4
 let board_length = board_width * board_height
 let number_of_ghosts = number_of_blue_ghosts + number_of_red_ghosts
-let search_time = 1.0
+let search_time = ref 1.0
 
 let () = assert (number_of_blue_ghosts + number_of_red_ghosts = List.length known_placement_cases)
 let () = assert (number_of_blue_ghosts + number_of_red_ghosts = List.length unknown_placement_cases)
@@ -41,7 +41,7 @@ let () = assert (number_of_blue_ghosts + number_of_red_ghosts = List.length unkn
   ============================ Fonctions utilitaires =============================
   ================================================================================*)
 let player (p, _, _ : state) : player = 
-  (* post-condition : renvoie le joueur donc c'est le tour *)
+  (* post-condition : renvoie le joueur dont c'est le tour *)
   p
 
 let other = function Known -> Unknown | Unknown -> Known
@@ -192,7 +192,7 @@ let () = assert (outcome (Known, ".....1R...0.....", 0) = Some(Unknown))
 let () = assert (outcome (Known, "R...1......B....", 0) = Some(Unknown)) *)
 
 let possible_move (k_from : int) (k_to : int) : bool = 
-  (*post-condition : true si la case de départ est occupée par un fantôme du joueur donc c'est le tour 
+  (*post-condition : true si la case de départ est occupée par un fantôme du joueur dont c'est le tour 
       et si le déplacement figure parmi les mouvements possibles pour les fantômes 
       (à savoir déplacement de 1 à gauche, de 1 à droite, de 1 en haut et de 1 en bas), false sinon *)
   List.mem (k_to - k_from) possible_moves
@@ -219,9 +219,9 @@ let valid_move (p, b, d : state) (k_from : int) (k_to : int) : bool =
                   end
 
 (* possible_move et valid_move : pourquoi faire deux fonctions différentes ?
-possible_move : conditions nécessaires pour qu'un pour qu'un coup soit correcte mais déjà vérifiées 
+possible_move : conditions nécessaires pour qu'un coup soit correct mais déjà vérifiées 
   lors des appels depuis la fonction moves 
-valid_move : conditions nécessaires pour qu'un coup soit correcte mais non déjà vérifiées lors 
+valid_move : conditions nécessaires pour qu'un coup soit correct mais non déjà vérifiées lors 
   des appels depuis la fonction moves
 Ainsi, depuis la fonction moves on n'appelle que valid_move, tandis que depuis la fonction user_move
 on appelle les deux. *)
@@ -317,7 +317,7 @@ let list_placement_to_placement (l_p : list_placement) : placement =
 
 
 let () = Random.self_init () (* Initialisation du module Random, autrement il donne toujours les mêmes valeurs
-                                au fil des éxécutions.*)
+                                au fil des exécutions.*)
 let random_placement_list () : list_placement = 
   let rec aux (blues : int) (reds : int) : list_placement = 
     match (blues, reds) with
@@ -333,7 +333,7 @@ let random_placement_list () : list_placement =
 let random_placement () : placement = 
   list_placement_to_placement (random_placement_list ())
 
-let create_initial_state (pl : placement): state = 
+let create_initial_state ?(first_player=Known) (pl : placement): state = 
   let known_cnt = ref (-1) in
   let unknown_cnt = ref (-1) in
   let fill (k : int) : char = 
@@ -344,7 +344,7 @@ let create_initial_state (pl : placement): state =
       unknown_cnt := !unknown_cnt + 1;
       char_of_int (48 + !unknown_cnt) 
     ) else '.'
-  in (Known, String.init board_length fill, 0)
+  in (first_player, String.init board_length fill, 0)
 
 let random_initial_state () : state = 
   create_initial_state (random_placement ())
@@ -472,19 +472,6 @@ let rec alphabeta (pl : placement) ((p, _, _) as s : state) (d: int) (a : int) (
     in
     loop (if p = Known then min_int else max_int) a b l
 let alphabeta (pl : placement) (s : state) (depth): int = 
-  (* appelle alphabeta à des profondeurs successives, c'est un parcours en profondeurs itérés
-  let rec iterative_deepening_search (end_time : float) (depth : int) (acc : int): int = 
-    if Sys.time () > end_time then (
-      Printf.printf "Recherche effectuée à la profondeur %d. \n" (depth-1);
-      acc
-    )else (
-      Printf.printf "Profondeur %d.\n" depth;
-      Printf.printf "Sys.time : %f.\n" (Sys.time ());
-      Printf.printf "End time : %f.\n" end_time;
-      iterative_deepening_search end_time (depth+1) (alphabeta pl s depth (-100) (+100))
-     ) in 
-  iterative_deepening_search (Sys.time () +. search_time) 1 0 *)
-
   alphabeta pl s depth (-100) (+100)
 
 
@@ -502,8 +489,8 @@ let best_average (possible_placements : placement list) (moves : pending_state l
   (* entreés : 
     - bp_s : best pending state
     - bscore : best score 
-  postconditions : meilleur mouvement avec le score associé. Ils sont calculés avec alphabeta par parcours en profondeurs itérés.*)
-  let end_time = Sys.time () +. search_time in
+  postconditions : meilleur mouvement avec le score associé. Ils sont calculés avec alphabeta par parcours en profondeur itérée.*)
+  let end_time = Sys.time () +. !search_time in
   let rec iterative_deepening_search (depth : int) (bp_s : pending_state) (bscore : int) (l : pending_state list) : pending_state * int = 
     if Sys.time () > end_time then (Printf.printf "Profondeur du calcul : %d.\n" depth; bp_s, bscore) else
     match l with
@@ -527,11 +514,11 @@ let worst (possible_placements : placement list) (p_s : pending_state) (depth : 
   worst possible_placements p_s depth 0
 
 let least_worst (possible_placements : placement list) (moves : pending_state list) : pending_state * int = 
-  (* entreés : 
+  (* entrées : 
     - bp_s : best pending state
     - bscore : best score 
-  postconditions : meilleur mouvement avec le score associé. Ils sont calculés avec alphabeta par parcours en profondeurs itérés.*)
-  let end_time = Sys.time () +. search_time in
+  postconditions : meilleur mouvement avec le score associé. Ils sont calculés avec alphabeta par parcours en profondeur itérée.*)
+  let end_time = Sys.time () +. !search_time in
   let rec iterative_deepening_search (depth : int) (bp_s : pending_state) (bscore : int) (l : pending_state list) : pending_state * int = 
     match l with
     | [] -> if Sys.time () > end_time then (
@@ -670,7 +657,52 @@ let rec alphabeta_vs_user_worst (user_placement : placement) (s: state) : state 
       alphabeta_vs_user_worst user_placement (play user_placement bmove)
 
 
-let () = play_game_with_user (alphabeta_vs_user_worst user_placement) 
-                             (let binitial_state, baverage = least_worst (all_possible_placements) all_initial_pending_states in
-                                Printf.printf "L'emplacement que je joue a un pire cas de %d.\n" baverage;
-                                play (random_placement ()) binitial_state)
+let all_initial_pending_states_for (first_player: player) : pending_state list = 
+  let all_initial_states = List.map (create_initial_state ~first_player) all_possible_placements in
+  List.map (fun s -> (-1, fun g -> s)) all_initial_states
+
+let ask_strategy () = 
+  let rec loop () = 
+    Printf.printf "Voulez-vous jouer contre la stratégie Average (A) ou Worst (W) ? \nRéponse (A/W) : ";
+    match String.trim (String.uppercase_ascii (read_line ())) with
+    | "A" -> `Average
+    | "W" -> `Worst
+    | _ -> Printf.printf "Entrée invalide.\n"; loop ()
+  in loop ()
+
+let ask_first_player () = 
+  let rec loop () = 
+    Printf.printf "Qui commence ? L'ordinateur (O) ou Vous (V) ? \nRéponse (O/V) : ";
+    match String.trim (String.uppercase_ascii (read_line ())) with
+    | "O" -> Known
+    | "V" -> Unknown
+    | _ -> Printf.printf "Entrée invalide.\n"; loop ()
+  in loop ()
+
+let ask_search_time () = 
+  let rec loop () = 
+    Printf.printf "Quel temps de recherche par coup souhaitez-vous attribuer à l'IA ? (en secondes, ex: 1.0) \nRéponse : ";
+    try 
+      let t = float_of_string (String.trim (read_line ())) in
+      if t <= 0.0 then (Printf.printf "Le temps doit être positif.\n"; loop ()) else t
+    with Failure _ -> Printf.printf "Entrée invalide. Veuillez entrer un nombre.\n"; loop ()
+  in loop ()
+
+let () = 
+  Printf.printf "\n=== Geister Minimax Classique ===\n\n";
+  let strat = ask_strategy () in
+  let first = ask_first_player () in
+  search_time := ask_search_time ();
+  
+  Printf.printf "\nJe réfléchis à mon placement initial...\n";
+  let all_pending = all_initial_pending_states_for first in
+  
+  match strat with
+  | `Average ->
+      let binitial_state, baverage = best_average all_possible_placements all_pending in
+      Printf.printf "\nL'emplacement que je joue a une moyenne de %d.\n" baverage;
+      play_game_with_user (alphabeta_vs_user_average user_placement) (play (random_placement ()) binitial_state)
+  | `Worst ->
+      let binitial_state, bworst = least_worst all_possible_placements all_pending in
+      Printf.printf "\nL'emplacement que je joue a un pire cas de %d.\n" bworst;
+      play_game_with_user (alphabeta_vs_user_worst user_placement) (play (random_placement ()) binitial_state)
