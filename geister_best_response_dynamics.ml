@@ -1348,12 +1348,12 @@ module IMP_MINIMAX = struct
     let search_nash_equilibrium_converge (nb_searches : int) (nb_trials : int) (abort_iteration_counts : (float * int) list) (depth : int) : (strategy * strategy) option =
         (* entrée : nb_searches : nombre de recherches. A chaque recherche, de deux stratégies initiales sont inventés et fixes durant tous les essais 
                         de la recherche
-                    nb_trials : nombre d'essais par recherche. A chaque essai, on réalise la méthode fictious play à partir des stratégies initiales de
+                    nb_trials : nombre d'essais par recherche. A chaque essai, on réalise la méthode des meilleures réponses à partir des stratégies initiales de
                         la recherche.
                     abort_iteration_counts : tableau de quand arrêter l'essai en fonction de l'avancement de l'essai (du meilleur score obtenu)
                         exemple : abort_iteration_counts = [(0.99, 50); (0.74, 1000); (0.49, 20000); (0.24, 50000); (-0.01, 200000); (-1.01, 1000000)] 
                     depth : profondeur pour les algorithmes IMP-Minimax utilisés
-        Cette fonction recherche un équilibre de Nash en appliquant la méthode Fictitious sur nb_searches couples de stratégies initiales générées
+        Cette fonction recherche un équilibre de Nash en appliquant la méthode des meilleures réponses sur nb_searches couples de stratégies initiales générées
             par IMP-minimax à deux joueurs et nb_trials fois par couple de stratégie initiale. La meilleur réponse est déterminée grâce à l'algorithme 
             IMP-alpha-bêta, la convergence vers un équilibre de Nash est forcée en passant à la stratégie suivante seulement si elle est mieux que la 
             précédente, i.e l'adversaire donne un réponse au pire aussi bien que celle précédente.
@@ -1369,7 +1369,7 @@ module IMP_MINIMAX = struct
                 for ess = 1 to nb_trials do 
                     try 
                     Printf.printf "\n\n\n";
-                    Printf.printf "--- Recherche %d Essai %d : on essaie une méthode fictitious play avec les stratégies initiales de la recherche %d. ---\n" search ess search;
+                    Printf.printf "--- Recherche %d Essai %d : on essaie une méthode des meilleures réponses avec les stratégies initiales de la recherche %d. ---\n" search ess search;
                     Printf.printf "\n";
                     let global_it = ref 0 in
                     let stuck_it = ref 0 in 
